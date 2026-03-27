@@ -1,9 +1,13 @@
-# Remaining Tasks for "Ideal State"
+# Ideal State Roadmap
+
+Статус: `target`
+
+Назначение: перечень задач до целевого состояния системы. Файл не описывает текущее состояние проекта.
 
 > **Важно:** этот файл описывает _оставшиеся_ задачи до ideal state.  
 > Исторически часть пунктов в нём уже была закрыта. Актуальный снимок текущего состояния см. в [[changelog/implementation-status]].
 
-## 🎯 Already Done (v2.0)
+## Already Done (v2.0)
 - ✅ Bot Settings UI (режим ответов, тексты, точки выдачи)
 - ✅ Dark Theme (переключатель + localStorage)
 - ✅ Enhanced Bot UX (minimal buttons, emoji)
@@ -17,7 +21,7 @@
 - ✅ Section-level visibility settings in admin UI
 - ✅ Automated tests at repository level (`backend`, `admin_service`, `admin-web/e2e`)
 
-## 🔧 Phase 2: Advanced Features (Optional)
+## Phase 2: Advanced Features (Optional)
 
 ### 1. AI Integration (Medium Priority)
 **Current State**: AI module exists, but main production path intentionally remains regex-first/offline-safe

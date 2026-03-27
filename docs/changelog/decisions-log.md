@@ -1,5 +1,343 @@
 # Decisions log
 
+## 2026-03-26 — Order parser policy: no chat-specific hacks, only reusable learning from admin data
+
+**Context**: Пользователь зафиксировал архитектурное требование для бота: парсинг заказов не должен чиниться точечными чат-специфичными костылями под отдельные сообщения. Источник истины для доступных товаров — активный каталог, собранный из admin-side сообщений в чате. Источник истины для точек выдачи — только точки, заведённые нами в `pickup_places`. Распознавание пользовательских заказов должно улучшаться через общие механизмы нормализации, fuzzy matching и alias derivation внутри этих справочников, а не через ручные if/else под конкретный кейс.
+
+### Решения
+
+- Любые улучшения парсера должны быть переносимыми между чатами:
+  - использовать активный каталог и вручную заведённые pickup points как единственный source of truth;
+  - расширять общую нормализацию текста, similarity scoring и alias derivation;
+  - избегать жёстко пришитых chat-specific/product-specific веток, если их нельзя объяснить как reusable rule.
+- Пользовательские сообщения не должны создавать новые точки выдачи или новые товары сами по себе:
+  - если текст не подтверждается `catalog_items`, позиция остаётся unmatched;
+  - если текст не подтверждается `pickup_places`, точка выдачи остаётся unset.
+- Реальные новые ошибки проверяются по live БД и свежим сообщениям, а не только по историческим sample-файлам.
+- Если в данных обнаруживаются «мусорные» сущности (например, служебный текст, попавший в pickup places), парсер должен уметь их отфильтровывать как класс, а не добавлять встречный костыль.
+
+### Consequences
+
+- Парсер развивается как доменный слой, а не как набор исключений под текущую выборку сообщений.
+- Новые чаты и новые каталоги должны выигрывать от тех же улучшений без ручной донастройки.
+
+## 2026-03-25 — PeopleAnalyticsPanel: починка данных аналитики и полнота ролей
+
+**Context**: Панель «Аналитика людей» (`PeopleAnalyticsPanel`) визуально рендерилась, но все пользователи отображались как «Нет входа», потому что backend-эндпоинт `/users` не возвращал поля `created_at` и `last_login`. Кроме того, `ROLE_LABELS` не содержал роли `sysadmin` и `viewer`, и они показывались как raw code-строки.
+
+### Решения
+
+- Backend:
+  - `UserResponse` в `schemas.py` расширен полями `created_at: str | None` и `last_login: str | None`.
+  - `_build_user_response()` теперь заполняет `created_at` из `AdminUser.created_at` и `last_login` из `admin_login_attempts` (последний успешный логин).
+  - Добавлен `_load_last_logins()` для batch-запроса `MAX(created_at)` по `LoginAttempt`, что избавляет от N+1 в `list_users`.
+- Frontend:
+  - `PeopleAnalyticsPanel.tsx`: `ROLE_LABELS` дополнен `sysadmin: "Сисадмин"` и `viewer: "Наблюдатель"`; цвет pie-chart для sysadmin — `error.dark`.
+  - `WorkforcePage.tsx`: `ROLE_LABELS` синхронизирован с тем же набором ролей.
+
+### Consequences
+
+- Графики логинов (7д/30д/90д/Старше/Нет входа) теперь корректно распределяют пользователей.
+- Список «Недавняя активность» показывает реальные даты входа.
+- Sysadmin и viewer отображаются с человекочитаемыми подписями.
+
+## 2026-03-24 — Sysadmin elevated to real owner-superset RBAC
+
+**Context**: Первая итерация роли `sysadmin` покрыла settings/UI и добавила owner-side view mode, но в реальном RBAC система оставалась перекошенной: многие backend-роуты и page-local frontend guards всё ещё проверяли только `owner`. В результате sysadmin видел часть интерфейса, но не получал фактический доступ ко всем owner-сценариям.
+
+### Решения
+
+- Backend:
+  - `is_owner()` в `admin_service/app/api/common.py` теперь трактует `sysadmin` как owner-equivalent роль для всех legacy owner-checks.
+  - `can_manage_deliveries()` расширен до `owner/sysadmin/pickup_admin`.
+  - `sysadmin` добавлен в `DEFAULT_ROLES` и в `_has_admin_access()` внутри `admin_sync.py`.
+- Frontend:
+  - `AppRoutes.tsx` больше не вычитает `owner` из effective roles при owner→sysadmin view mode; режим теперь **добавляет** sysadmin-возможности вместо их симуляции ценой потери owner-доступа.
+  - Маршрут `/export` и shell-навигация (`MainLayout`) теперь используют секционные permissions с `sysadmin` наравне с `owner`.
+  - `OrdersPage`, `UsersPage`, `CatalogsPage` переведены с локальных `isOwner`-ограничений на owner/sysadmin access для delete/export/full-details/catalog management сценариев.
+  - Targeted tests обновлены под новую модель доступа.
+
+### Consequences
+
+- `sysadmin` стал реальной superset-ролью по отношению к `owner`, а не только UI-режимом просмотра.
+- Legacy owner-only backend guards продолжают работать без массового переписывания роутеров, потому что shared helper теперь отражает актуальную бизнес-модель.
+- Owner view mode остаётся полезным как UX-инструмент, но больше не конфликтует с фактической иерархией прав.
+
+## 2026-03-24 — Sysadmin role, UI toggle system, DeliveryPage customization, scroll-to-top & error report
+
+**Context**: Система ролей не поддерживала разделение между владельцем бизнеса (owner) и техническим администратором. Системные настройки были доступны только owner'у, операторам delivery-страницы не хватало гибкости в интерфейсе, а глобальная навигация не имела «наверх» и «сообщить об ошибке».
+
+### Решения
+
+- **Роль `sysadmin`**:
+  - Backend: добавлены хелперы `is_sysadmin()`, `is_owner_or_sysadmin()` в `common.py`; `is_admin_or_above()` включает `sysadmin`.
+  - Settings router: endpoint `PUT /settings` теперь принимает `is_owner_or_sysadmin`.
+  - Frontend: `sysadmin` добавлен в `ACTIVE_ROLE_CODES`, `ROLE_LABELS`, `ROLE_DESCRIPTIONS`, `DEFAULT_SECTION_PERMS`.
+  - Добавлен client-side `role view mode`: owner может переключиться в `sysadmin`-режим из user menu / Settings, чтобы видеть интерфейс и доступы глазами sysadmin без изменения своих реальных ролей в БД.
+
+- **UI Toggle Settings (управляются sysadmin)**:
+  - 13 новых ключей: `delivery_show_transferred_btn`, `delivery_show_not_delivered_btn`, `delivery_show_partial_btn`, `delivery_show_raw_text`, `delivery_show_problems_tab`, `delivery_show_composition`, `delivery_show_order_id`, `delivery_show_order_date`, `delivery_simplified_mode`, `settings_tab_vis_app`, `settings_tab_vis_interface`, `settings_tab_vis_system`, `settings_tab_vis_tools`.
+  - SettingsPage: 8-я вкладка «Сисадмин» с двумя карточками: UI выдачи + видимость вкладок настроек.
+  - Видимость вкладок управляется sysadmin через `TAB_VIS_MAP`; сам sysadmin видит все вкладки.
+
+- **DeliveryPage кастомизация**:
+  - Удалён текст описания под заголовком; кнопка «Обновить» перенесена в панель вкладок.
+  - Вкладка «Проблемы» стала опциональной (`showProblemsTab`).
+  - Колонки (ID, состав, raw text, дата) и кнопки (частично/передан/не выдан) теперь переключаемые через `uiSettings`.
+  - `simplifiedMode` скрывает дополнительные столбцы для упрощённого интерфейса.
+
+- **Scroll-to-top + Сообщить об ошибке** (MainLayout):
+  - Floating Fab «наверх» появляется при скролле > 300px, плавно скроллит вверх.
+  - Fab «Сообщить об ошибке» открывает Dialog с TextField; отправляет POST `/feedback` (пока placeholder, будет подключен к Telegram).
+
+- **Каталог Балашиха/Железнодорожный**:
+  - Создан `backend/scripts/seed_catalog_balashiha.py` с 36 позициями из chat export.
+  - Точки выдачи: Белякова 6, ТЦ Марс (Железнодорожный).
+  - Бот настроен в режиме `hidden` (молчаливый сбор заказов).
+
+### Consequences
+
+- Owner'ы освобождены от системных настроек; sysadmin получает полный контроль над UI и системой.
+- Owner может безопасно проверить sysadmin-only сценарии без ручной переназначки ролей и без риска потерять owner-доступ.
+- DeliveryPage стала гибкой: операторы видят только нужные столбцы и кнопки.
+- Глобальная навигация улучшена scroll-to-top и формой обратной связи.
+- Новый рынок (Балашиха) подготовлен для запуска с полным каталогом и точками выдачи.
+
+## 2026-03-23 — Smart item add flow with templates, auto item-code, and clear SKU wording
+
+**Context**: После smart-create каталога ручной труд оставался в самой частой операции — добавлении новой позиции. Оператору приходилось заново набивать карточку товара (код, единица, фасовка, цена, алиасы), хотя в истории чата уже были похожие позиции. Параллельно пользовательская формулировка `SKU` была слишком технической и вызывала лишние вопросы у операторов.
+
+### Решения
+
+- Backend (`catalogs` router + schemas):
+  - добавлен endpoint `GET /catalogs/{catalog_id}/item-templates` для выдачи шаблонов позиций из каталогов того же чата;
+  - create/update позиций теперь принимают совместимые поля `sku` и `item_code`;
+  - добавлена генерация/нормализация уникального кода товара при пустом ручном вводе;
+  - в ответах сохранена обратная совместимость: возвращаются и `sku`, и `item_code`.
+- Frontend (`CatalogsPage` + dialogs + utils):
+  - в диалоге «Добавить товар» добавлен автокомплит по шаблонам прошлых каталогов;
+  - при выборе шаблона автоматически подставляются `title`, `unit_hint`, `pack_hint`, `price_text`, `aliases` и код товара;
+  - добавлены `buildItemCodePreview()` и `suggestAliases()` для автогенерации кода и «умных алиасов»;
+  - пользовательские подписи в формах/таблицах переведены на термин «Код товара (артикул)» вместо `SKU`.
+- UX order editing:
+  - в `OrderEditDialog` подсказки и placeholders синхронизированы с новой терминологией (код товара вместо SKU), чтобы поведение было единым между «Каталогами» и «Заказами».
+
+### Consequences
+
+- Добавление новой позиции ускорено: оператор чаще выбирает «шаблон + правка исключений», а не вводит всё с нуля.
+- Единая формулировка «Код товара» снижает когнитивную нагрузку для не-технических пользователей.
+- API остаётся совместимым с существующими клиентами благодаря dual-field контракту `sku`/`item_code`.
+
+## 2026-03-23 — Smart catalog bootstrap + one-click distribution launch + auto-alias hardening
+
+**Context**: Перед каждой новой раздачей оператору приходилось повторно вручную создавать каталог, переносить ассортимент и отдельно вручную выбирать чаты для `distribution_mode`. При постоянном обновлении ассортимента это увеличивало операционную нагрузку и вероятность ошибок, а parser требовал ручного ввода большого списка aliases для новых/вариативно называемых позиций.
+
+### Решения
+
+- `CatalogsPage` переведена на smart-create flow:
+  - выбор основы из предыдущих каталогов текущего чата;
+  - автокопирование позиций из source-каталога;
+  - авто-закрытие существующего open-каталога в целевом чате;
+  - предзаполнение полей create-диалога и preview количества копируемых позиций.
+- `POST /catalogs` расширен опциями `source_catalog_id`, `copy_items_from_source`, `close_existing_open`.
+- Добавлен `GET /catalogs/bootstrap-options` для получения рекомендуемой базы каталога по чату.
+- `SettingsPage → Точки` получила one-click автоподготовку раздачи: чаты с открытыми каталогами автоматически подставляются в `distribution_mode_chat_ids`, а `distribution_mode` включается одним действием.
+- В `catalogs` router включена авто-нормализация/автогенерация aliases при create/update позиции, включая распространённые сокращения (`с/м`, `м/с`, `х/к`, `г/к`, `с/с`) и keyword-обогащение для parser-слоя.
+
+### Consequences
+
+- Новый каталог и запуск выдачи теперь требуют существенно меньше ручных шагов и меньше подвержены operator-error.
+- Повторное использование исторических каталогов стало встроенным сценарием, а не отдельной ручной процедурой.
+- Parser устойчивее к пользовательским сокращениям и вариативным названиям новых товаров без обязательного ручного заполнения каждого alias.
+
+## 2026-03-23 — AnalyticsPage декомпозирована в модуль `pages/analytics/*`
+
+**Context**: `AnalyticsPage.tsx` накапливала mixed-слой: owner-only orchestration (загрузка и фильтрация данных по чатам) смешивалась с крупными inline UI-хелперами (`StatCard`, fallback bar chart, status-distribution блок, collapsible section wrapper) и статусными цветами. Это увеличивало размер page-файла и усложняло локальные правки аналитического UI.
+
+### Решения
+
+- Добавлен модуль `admin-web/src/pages/analytics/*`:
+  - `types.ts` — типы карточек и распределения статусов;
+  - `constants.ts` — `STATUS_COLORS` и `PIE_COLORS`;
+  - `components.tsx` — `StatCard`, `SimpleBarChart`, `StatusDistribution`, `AnalyticsSection`.
+- `AnalyticsPage.tsx` оставлена orchestration-страницей: запросы API, фильтрация по чату, вычисления summary/series и wiring графиков/секций.
+
+### Consequences
+
+- Owner-only аналитика стала проще для сопровождения: UI-компоненты и константы меняются локально без перегрузки page-файла.
+- Снижен риск регрессий при следующих итерациях по аналитическим виджетам и layout-рефактору.
+
+## 2026-03-23 — PickupAdminPage: старт модульной декомпозиции (`pages/pickupAdmin/*`)
+
+**Context**: `PickupAdminPage.tsx` всё ещё содержит крупные mobile/desktop блоки для назначений и точек выдачи, плюс inline-диалог назначения и UI-утилиты. Для поэтапного безопасного рефактора выбран incremental-подход: сначала вынести low-risk слой без изменения поведения таблиц.
+
+### Решения
+
+- Добавлен модуль `admin-web/src/pages/pickupAdmin/*`:
+  - `types.ts` — типы страницы и диалога назначения;
+  - `utils.tsx` — `renderMobileMetaCard` и helper подсчёта назначений по точке;
+  - `dialogs.tsx` — `AssignPickupAdminDialog`.
+- `PickupAdminPage.tsx` переведена на импорт этих модулей, сохранив текущий UX и API-контракт.
+
+### Consequences
+
+- Страница стала тоньше и менее связной без рискованной массовой переклейки таблиц.
+- Подготовлен безопасный фундамент для следующей волны extraction (assignments/pickup places mobile+desktop blocks в components-layer).
+
+## 2026-03-23 — PickupAdminPage: extraction tab-блоков в `pickupAdmin/components.tsx`
+
+**Context**: После первого шага декомпозиции (`types/utils/dialogs`) основной вес `PickupAdminPage` оставался в inline-табах: mobile/desktop рендер назначений и точек выдачи по-прежнему жили в page-файле.
+
+### Решения
+
+- Добавлен `admin-web/src/pages/pickupAdmin/components.tsx` с extracted UI-блоками:
+  - `PickupAdminSummaryCards`;
+  - `AssignmentsSection` (mobile + desktop);
+  - `PickupPlacesSection` (форма добавления + mobile + desktop).
+- `PickupAdminPage.tsx` переведена на orchestration-подключение этих компонентов, при сохранении существующего поведения handler-ов и confirm-flow.
+
+### Consequences
+
+- Основной page-файл стал значительно компактнее и проще для поддержки.
+- Крупные UI-блоки вкладок теперь можно менять отдельно от data-loading/permission-логики.
+- Следующие итерации (например, unit-тесты и дополнительные sub-components) можно делать локально в `pickupAdmin/components.tsx`.
+
+## 2026-03-23 — ExportPage декомпозирована в модуль `pages/export/*`
+
+**Context**: `ExportPage.tsx` содержала в одном файле шаблонные карточки, группировку листов, per-sheet фильтры, глобальные фильтры, preview выбранных листов и orchestration export-flow (password confirmation + build). Такой слой рос как UI-heavy монолит и усложнял точечные правки в builder-части.
+
+### Решения
+
+- Добавлен модуль `admin-web/src/pages/export/*`:
+  - `types.ts` — типы конфигурации листа и групп листов;
+  - `constants.ts` — иконки/порядок групп export-листов;
+  - `utils.ts` — группировка листов и helper скачивания blob;
+  - `components.tsx` — шаблонные карточки, selector листов, карточка глобальных фильтров и preview выбранных листов.
+- `ExportPage.tsx` оставлена orchestration-страницей: загрузка пресетов/справочников, состояние фильтров и запуск export-build.
+
+### Consequences
+
+- Export builder проще расширять без правок в длинном page-файле.
+- UI-блоки выбора/фильтров стали переиспользуемыми и удобнее для локальных изменений.
+- Структура страницы согласована с уже внедрённым паттерном feature-модулей (`settings`, `orders`, `delivery`, `catalogs`, `users`).
+
+## 2026-03-23 — UsersPage декомпозирована в модуль `pages/users/*`
+
+**Context**: `UsersPage.tsx` оставалась следующим крупным монолитом после `CatalogsPage`: в одном файле жили role-константы, поиск/сортировка, mobile/desktop представления, редактирование ролей, регионы, password reset, owner promotion и create-user flow. Любая локальная правка цепляла сразу и data wiring, и JSX-heavy UI.
+
+### Решения
+
+- Добавлен модуль `admin-web/src/pages/users/*`:
+  - `types.ts` — типы ролей, формы создания пользователя и props extracted-блоков;
+  - `constants.ts` — assignable role set и display/color-конфиги ролей;
+  - `utils.tsx` — поиск, сортировка, форматирование дат и mobile meta-card helper;
+  - `components.tsx` — мобильная сетка карточек и desktop-таблица пользователей;
+  - `dialogs.tsx` — диалоги create user, edit roles, regions, password reset и owner promotion.
+- `UsersPage.tsx` оставлена orchestration-страницей: загрузка данных, state/handlers, permission guards и wiring extracted UI-модулей.
+- Публичный контракт сохранён: `UsersPage` по-прежнему поддерживает `embedded`-режим для `PeoplePage`.
+
+### Consequences
+
+- Изменения в user-management UI теперь локализуются по feature-слоям, а не в одном 1000+ строковом файле.
+- Mobile/desktop surface и диалоги можно развивать независимо от API-загрузки и permission-логики.
+- Риск повторного повреждения orchestration-файла при следующих refactor-итерациях заметно снижается.
+
+## 2026-03-23 — CatalogsPage декомпозирована в модуль `pages/catalogs/*`
+
+**Context**: `CatalogsPage.tsx` оставалась крупным orchestration-монолитом: список каталогов, рендер mobile/desktop представлений, CRUD товаров, импорт каталога в чат и диалоги жили в одном файле. Это усложняло точечные изменения и делало страницу хрупкой при дальнейших UI-итерациях.
+
+### Решения
+
+- Добавлен модуль `admin-web/src/pages/catalogs/*`:
+  - `types.ts` — типы каталогов, товаров и формовых состояний;
+  - `constants.ts` — статусные конфиги каталогов;
+  - `utils.ts` — форматирование дат и preview генерации кода каталога;
+  - `components.tsx` — mobile/desktop render-блоки и секция товаров каталога;
+  - `dialogs.tsx` — диалоги создания каталога, CRUD товара, stop-листа и импорта в другой чат.
+- `CatalogsPage.tsx` пересобрана как тонкая orchestration-страница: загрузка данных, state/handlers и wiring extracted-компонентов без изменения текущего UX и API-контракта.
+
+### Consequences
+
+- Каталожный экран стал устойчивее к локальным правкам и проще для дальнейшего дробления по feature-компонентам.
+- CRUD/clone-диалоги и таблицы теперь можно менять отдельно от загрузки данных и permission-логики.
+- Проверки после восстановления страницы: целевой `eslint` и production build `admin-web` проходят.
+
+## 2026-03-23 — DeliveryPage декомпозирована в модуль `pages/delivery/*`
+
+**Context**: `DeliveryPage.tsx` оставалась крупным монолитом: в одном файле смешивались статусные конфиги, типы форм/черновиков, JSON-парсинг выдачи, форматтеры, построение payload и UI-хелперы таблиц/мобильных meta-card. Это повышало риск регрессий при локальных изменениях выдачи.
+
+### Решения
+
+- Добавлен модуль `admin-web/src/pages/delivery/*`:
+  - `types.ts` — типы draft-структур и delivery status;
+  - `constants.ts` — статусные конфиги (`DELIVERY_STATUS_CONFIG`, `ORDER_ERROR_STATUS`) и `PAGE_SIZE`;
+  - `utils.ts` — pure-утилиты для парсинга/сборки payload/форматирования/summary;
+  - `components.tsx` — UI-хелперы `SyncedTableFrame` и `renderMobileMetaCard`.
+- `DeliveryPage.tsx` переведена на импорты из `pages/delivery/*` без изменения текущего UX и API-поведения.
+
+### Consequences
+
+- Страница стала заметно тоньше и проще для сопровождения.
+- Изолированные delivery-утилиты теперь можно развивать и тестировать отдельно от JSX-слоя.
+- Проверки после рефактора: `eslint` (целевые файлы) + targeted Vitest (`MainLayout`, `OrdersPage`, `SettingsPage`) проходят.
+
+## 2026-03-23 — OrdersPage декомпозирована в модуль `pages/orders/*`
+
+**Context**: После декомпозиции app-shell и `SettingsPage` страница `OrdersPage` всё ещё содержала смешанный слой: UI + export-типы + статусные конфиги + утилиты формирования параметров/имени выгрузки в одном файле. Это усложняло поддержку и делало изменение экспортного flow рискованным.
+
+### Решения
+
+- Добавлен модуль `admin-web/src/pages/orders/*`:
+  - `types.ts` — типы export flow (`ExportMode`, `ExportFilterState`, defaults);
+  - `constants.tsx` — статусные конфиги заказа/выдачи и `PAGE_SIZE`;
+  - `utils.ts` — `formatDate`, `buildExportParams`, `buildExportFilename`.
+- `OrdersPage.tsx` переведена на импорты из `pages/orders/*`, с сохранением текущего UI/поведения.
+
+### Consequences
+
+- Логика страницы стала более слоистой, а экспортный поток — легче для сопровождения и тестирования.
+- Локальные изменения в форматах/правилах экспорта теперь меньше затрагивают JSX-слой.
+- Проверки после рефактора: `eslint src` + targeted Vitest (`OrdersPage`, `SettingsPage`, `MainLayout`) проходят.
+
+## 2026-03-23 — SettingsPage выделена в модульный слой `pages/settings/*`
+
+**Context**: После декомпозиции app-shell `SettingsPage.tsx` оставалась самым тяжёлым фронтовым экраном: в одном файле одновременно жили типы, дефолтные настройки, role normalization, preview-логика и tab-layout утилиты. Это усложняло поддержку и создавало высокий риск регрессий при локальных правках.
+
+### Решения
+
+- Создан модульный слой `admin-web/src/pages/settings/*`:
+  - `types.ts` — типы `BotSettings`, `PickupPlace`, `PreviewMessageKind`, `SettingsTabLayoutItem`;
+  - `constants.ts` — `DEFAULT_SETTINGS`, `BOT_TEXT_CONFIG`, `BOT_BUTTON_CONFIG`, role labels/descriptions и `normalizeRoleList`;
+  - `preview.ts` — генерация live-preview сообщения и клавиатуры бота;
+  - `tabLayout.ts` — утилиты нормализации/чтения layout вкладок с явными параметрами.
+- `SettingsPage.tsx` переведена на импорты из этих модулей без изменения UX и API-контракта.
+
+### Consequences
+
+- Логика страницы стала слоистой и переиспользуемой: настройки/preview/tab layout теперь можно тестировать и менять отдельно.
+- Файл страницы заметно упрощён для дальнейшего компонентного дробления.
+- Валидация после изменений: `eslint src` + targeted Vitest (`SettingsPage`, `MainLayout`) проходят.
+
+## 2026-03-23 — Admin-web shell декомпозирован на app-модули (contexts / permissions / routes)
+
+**Context**: `admin-web/src/App.tsx` одновременно держал theme provider, auth callback flow, session-guard bootstrap, секционные права, feature flags и роутинг защищённой зоны. Это повышало связность: `MainLayout`, `PeoplePage`, `OrdersPage`, `SettingsPage` и тесты зависели от экспортов из `App.tsx`, из-за чего любой рефактор shell-логики затрагивал полпроекта.
+
+### Решения
+
+- Введён слой `admin-web/src/app/*` для app-level модулей:
+  - `contexts.tsx` — `ThemeContext`, `OwnerDebugContext`, `FeatureFlagsContext`, общие типы;
+  - `permissions.ts` — `DEFAULT_SECTION_PERMS`, `expandRoleAliases`, `useSectionPermissions`, `resolveHomePath`;
+  - `AppRoutes.tsx` — `OneTimeAuthHandler`, `ProtectedRoutes`, `RootWrapper`.
+- `App.tsx` оставлен как тонкий composition-root: theme + error/snackbar providers + верхнеуровневые routes.
+- Компоненты и страницы (`MainLayout`, `AppearanceSettingsPanel`, `PeoplePage`, `OrdersPage`, `SettingsPage`) переведены на прямые импорты из `app/*`, без зависимости от `App.tsx`.
+- Тесты `MainLayout` и `SettingsPage` синхронизированы с текущей IA меню/вкладок.
+
+### Consequences
+
+- Фронтенд-shell стал масштабируемее: изменения auth/ACL/routes больше не требуют массовой переклейки импортов от `App.tsx`.
+- Переиспользование app-level state (permissions/context hooks) стало явным и предсказуемым.
+- Регрессионные проверки после декомпозиции: `eslint src` + targeted Vitest по `MainLayout` и `SettingsPage` проходят.
+
 ## 2026-03-18 — Интеграционный комплект документации выровнен под самостоятельное техническое чтение
 
 **Context**: После реализации полного multi-provider integration layer часть документов уже содержала правильную структуру, но местами ещё описывала старое состояние системы (`stubs`, слишком Telegram-centric трактовка, коммуникационно-прикладные формулировки вместо neutral doc map).

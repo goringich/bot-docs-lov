@@ -45,7 +45,7 @@
 ### `POST /auth/login`
 - Auth: не нужна
 - Body: `email`, `password`
-- Ответ: `access_token`
+- Ответ: cookie session + JSON `{"status":"ok","session_type":"cookie"}`
 - Назначение: логин в admin-web
 
 ### `POST /auth/bootstrap`
@@ -62,9 +62,9 @@
 
 ### `POST /auth/token-login`
 - Auth: не нужна
-- Query: `one_time_token`
-- Ответ: `access_token`
-- Назначение: обмен one-time токена на JWT
+- Body: `one_time_token`
+- Ответ: cookie session + JSON `{"status":"ok","session_type":"cookie"}`
+- Назначение: обмен one-time токена на browser session
 
 ### `POST /auth/auto-provision`
 - Auth: `X-Service-Key`
@@ -82,7 +82,7 @@
 
 ### `GET /users`
 - Auth: JWT
-- Ответ: список пользователей
+- Ответ: список пользователей (поля: `id`, `email`, `name`, `is_active`, `tg_user_id`, `tg_username`, `roles[]`, `region_names[]`, `can_create_users`, `is_user_creator_delegate`, `created_at`, `last_login`)
 
 ### `POST /users`
 - Auth: JWT (owner/regional_admin)
@@ -122,12 +122,13 @@
 
 ### `PUT /users/{user_id}/password`
 - Auth: JWT (owner)
+- Header: `X-Password-Confirm-Token`
 - Body: `new_password`
 - Ответ: `{status: ok}`
 
 ### `POST /users/{user_id}/invite-link`
 - Auth: JWT (owner/regional_admin)
-- Ответ: one-time login URL
+- Ответ: single-use one-time login URL
 
 ### `POST /users/confirm-owner-role`
 - Auth: JWT (owner)

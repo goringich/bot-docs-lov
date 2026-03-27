@@ -1,6 +1,10 @@
 # Known issues
 
-## Resolved ✅
+Статус: `current`
+
+Назначение: перечень известных проблем и закрытых дефектов с кратким описанием исправлений.
+
+## Resolved
 
 - ~~(2026-06-18) Dark-mode: белый текст на белом фоне в OrdersPage (raw text), ExcelPreviewPage (header), TemplatesPage (column cards), DashboardPage (QuickStat) — hardcoded hex-цвета~~ → **Закрыто:** все заменены на theme-aware palette tokens (`text.primary`, `grey.900`/`grey.50` по mode, `primary.main`/`primary.contrastText`, `info`/`success`/`warning`).
 - ~~(2026-06-18) CatalogsPage: layout overflow при resize — `calc(100vw - 320px)` не учитывал динамическую ширину drawer~~ → **Закрыто:** заменено на `maxWidth: "100%"`.
@@ -26,6 +30,8 @@
 
 ## Open Issues
 
+- (2026-03-24) **Endpoint `/feedback` not implemented**: MainLayout отправляет POST `/feedback` при сабмите формы «Сообщить об ошибке», но backend endpoint пока не реализован. Frontend graceful-degrade: ошибка молча игнорируется. Следующий шаг — создать endpoint и forward в Telegram DM администратору.
+- (2026-03-24) **Sysadmin role must be manually assigned**: Роль `sysadmin` пока создаётся вручную в БД (`INSERT INTO admin_roles`), автоматического provisioning через UI нет.
 - (2026-03-18) Универсальный provider-agnostic ingress и bridge-based non-Telegram egress уже реализованы (`POST /integrations/{provider}/webhook` + outbound dispatch через `*_OUTBOUND_URL`), но production-ready vendor-native connectors по-прежнему остаются только для Telegram. Для Matrix/VK/MAX требуется довести transport client, точные provider-specific signature semantics и интеграционные тесты capability profile до production уровня.
 
 - (2026-03-18) Для внешней mobile / Matrix интеграции пока нет отдельного публичного customer-facing write API уровня «создать/изменить заказ из нативной формы». Текущий внешний контур `/integrations/*` ориентирован на чтение, а production-создание заказа идёт через bot/message pipeline. Для FluffyChat/Matrix это означает архитектурный выбор: либо новый adapter reuse поверх существующего message-driven flow, либо отдельная итерация на проектирование стабильного write contract.
@@ -83,5 +89,4 @@ WHERE status IN ('new', 'processing');
 2. Скопируйте authtoken из dashboard
 3. Добавьте в `.env`: `NGROK_AUTHTOKEN=your_token_here`
 4. Перезапустите: `make compose-restart`
-
 

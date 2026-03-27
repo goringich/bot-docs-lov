@@ -1,8 +1,12 @@
-# 🎉 v2.0 Production Upgrade — Summary
+# Upgrade Summary: v2.0
+
+Статус: `historical`
+
+Назначение: краткая historical summary по апгрейду `v2.0`.
 
 ## Что сделано
 
-### 1️⃣ База данных (Backend)
+### 1. База данных (Backend)
 Добавлены 2 новые таблицы в `backend/app/models.py`:
 - **`bot_settings`** — ключ-значение для настроек бота
 - **`pickup_places`** — справочник точек выдачи с активностью
@@ -10,7 +14,7 @@
 Создана миграция: `c9f8a1234567_add_bot_settings_and_pickup_places.py`
 - Автоматически заполняет дефолтные настройки и 3 точки выдачи
 
-### 2️⃣ Улучшенный UX бота (Backend)
+### 2. Улучшенный UX бота (Backend)
 Файлы: `backend/app/presenter/order_presenter.py`, `backend/app/domain/order_domain.py`, `backend/app/worker.py`
 
 **Изменения:**
@@ -22,7 +26,7 @@
   - Фильтрует медиа-ссылки (t.me, youtube.com)
   - Отсекает длинные тексты (>500 символов)
 
-### 3️⃣ Admin API (Admin Service)
+### 3. Admin API (Admin Service)
 Файл: `admin_service/app/main.py`
 
 **Новые эндпоинты:**
@@ -33,7 +37,7 @@
 - `PATCH /pickup-places/{id}` — изменить точку
 - `DELETE /pickup-places/{id}` — удалить точку
 
-### 4️⃣ Admin Web UI (Frontend)
+### 4. Admin Web UI (Frontend)
 Файлы: `admin-web/src/App.tsx`, `admin-web/src/api/client.ts`, `admin-web/src/pages/*`
 
 **Новые фичи:**
@@ -46,14 +50,14 @@
 - **CSV экспорт** на OrdersPage (кнопка "Экспорт CSV")
 - **Графики** на AnalyticsPage (bar-charts с анимацией)
 
-### 5️⃣ Документация
+### 5. Документация
 - `README.md` — обновлён раздел "Что нового"
 - [[changelog/decisions-log]] — добавлена секция v2.0
 - [[PRODUCTION_UPGRADE_v2.0]] — чеклист для деплоя
 
 ---
 
-## 🚀 Следующие шаги (для запуска изменений)
+## Следующие шаги
 
 ### Вариант 1: Пересборка Docker (рекомендуется)
 ```bash
@@ -84,7 +88,7 @@ curl http://localhost:8010/settings -H "Authorization: Bearer YOUR_TOKEN"
 
 ---
 
-## 🎯 Что изменилось для пользователя
+## Что изменилось для пользователя
 
 ### Обычный пользователь (в Telegram)
 - Более понятные кнопки с меньшим количеством опций
@@ -100,7 +104,7 @@ curl http://localhost:8010/settings -H "Authorization: Bearer YOUR_TOKEN"
 
 ---
 
-## 📊 Статистика изменений
+## Статистика изменений
 
 - **Модифицировано файлов**: 10
 - **Создано файлов**: 4
@@ -111,7 +115,7 @@ curl http://localhost:8010/settings -H "Authorization: Bearer YOUR_TOKEN"
 
 ---
 
-## ⚠️ Важные замечания
+## Важные замечания
 
 1. **Миграция обязательна** — без неё новые API эндпоинты не будут работать
 2. **bcrypt версия зафиксирована** — требуется 3.2.2 (уже в requirements.txt)
@@ -120,7 +124,7 @@ curl http://localhost:8010/settings -H "Authorization: Bearer YOUR_TOKEN"
 
 ---
 
-## 🐛 Если что-то не работает
+## Если что-то не работает
 
 ### Проблема: Настройки не сохраняются
 **Решение:** Проверь миграцию:

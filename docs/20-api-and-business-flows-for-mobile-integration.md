@@ -334,7 +334,7 @@ Flow:
 ### Последовательность
 
 1. `POST /auth/login`
-2. сохранить `access_token`
+2. принять cookie session
 3. `GET /me`
 4. в зависимости от роли открыть нужные экраны и endpoints
 

@@ -55,7 +55,7 @@ MVP: админы вручную заводят каталог (сбор) и п�
 
 ### Основные операции
 
-1) **Авторизация**: JWT + one-time links из Telegram
+1) **Авторизация**: `HttpOnly` cookie session + one-time links из Telegram
 2) **Каталоги**: создание, открытие/закрытие, CRUD товаров, стоп-лист, aliases
 3) **Заказы**: просмотр, фильтрация, смена статуса, **Excel экспорт (XLSX, только owner + с password confirmation)**
 4) **Настройки бота**: видимость бота (`bot_visible`), антиспам, тексты ответов, шаблоны и кнопки — в `Настройки → Бот`
@@ -155,7 +155,7 @@ MVP: админы вручную заводят каталог (сбор) и п�
 - Рекомендуется после `git pull`, миграций и infra/ui/backend изменений
 
 ### Integration API (внешние сервисы)
-- Аутентификация: `X-Service-Key` (значение из `ADMIN_ONE_TIME_KEY`)
+- Аутентификация: `X-Service-Key` (значение из `ADMIN_INTEGRATION_SERVICE_KEY`)
 - Основные ручки:
 	- `GET /integrations/capabilities`
 	- `GET /integrations/chats`
@@ -163,6 +163,16 @@ MVP: админы вручную заводят каталог (сбор) и п�
 	- `GET /integrations/pickup-places`
 	- `GET /integrations/orders`
 - Детали: [[13-integration-api]]
+
+### One-time login links
+
+- Выдаются ручками `POST /auth/one-time-link` и `POST /auth/auto-provision`
+- Для их выдачи используется только `ADMIN_ONE_TIME_KEY`
+- Ссылка теперь имеет вид:
+	- `/auth-callback#one_time_token=...`
+- Почему так:
+	- token не попадает в обычные серверные access logs как query string
+	- token серверно помечается как consumed после первого успешного `POST /auth/token-login`
 
 ## Public user commands (Telegram)
 

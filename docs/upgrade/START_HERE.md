@@ -1,8 +1,15 @@
-# 📚 v2.0 Production Upgrade — Navigation Index
+# Upgrade Package Index
 
-Этот файл поможет тебе быстро найти нужную информацию после обновления.
+Статус: `historical`
 
-## 🚀 Быстрый старт
+Назначение: навигационный индекс по historical upgrade-пакету `v2.0`.
+
+Текущий source of truth:
+- [[changelog/implementation-status]]
+- [[changelog/known-issues]]
+- [[14-api-reference]]
+
+## Быстрый старт
 
 **Хочешь сразу запустить?**
 → Читай [`UPGRADE_SUMMARY.md`](./UPGRADE_SUMMARY.md) ← **START HERE**
@@ -15,9 +22,9 @@
 
 ---
 
-## 📋 Все файлы документации
+## Все файлы документации
 
-### Для пользователя (User-Friendly)
+### Обзорные документы
 | Файл | Описание | Для кого |
 |------|----------|----------|
 | **[UPGRADE_SUMMARY.md](./UPGRADE_SUMMARY.md)** | 🌟 Краткий итог с инструкциями | Админы, DevOps |
@@ -25,7 +32,7 @@
 | **[FINAL_REPORT.md](./FINAL_REPORT.md)** | 📊 Отчёт о готовности системы | Менеджеры |
 | **[PROGRESS_VISUALIZATION.md](./PROGRESS_VISUALIZATION.md)** | 📈 Визуальный прогресс | Все |
 
-### Для разработчика (Technical)
+### Технические документы
 | Файл | Описание | Для чего |
 |------|----------|----------|
 | **[GIT_COMMIT_PLAN.md](./GIT_COMMIT_PLAN.md)** | 🔧 План git commit | Коммит изменений |
@@ -35,7 +42,7 @@
 
 ---
 
-## 🎯 Что читать в зависимости от цели
+## Что читать в зависимости от цели
 
 ### Цель: "Хочу запустить новую версию"
 1. [`UPGRADE_SUMMARY.md`](./UPGRADE_SUMMARY.md) — читай секцию "Следующие шаги"
@@ -58,7 +65,7 @@
 
 ---
 
-## 🔍 Поиск по ключевым словам
+## Поиск по ключевым словам
 
 **Migration** → [`PRODUCTION_UPGRADE_v2.0.md`](../PRODUCTION_UPGRADE_v2.0.md)  
 **Docker** → [`UPGRADE_SUMMARY.md`](./UPGRADE_SUMMARY.md) (раздел "Следующие шаги")  
@@ -71,7 +78,7 @@
 
 ---
 
-## 📊 Структура документации
+## Структура документации
 
 ```
 father-bot/
@@ -90,7 +97,7 @@ father-bot/
 
 ---
 
-## ⚡ Быстрые ссылки
+## Быстрые ссылки
 
 ### Production Deployment
 ```bash
@@ -132,7 +139,7 @@ cat docs/upgrade/WHAT_I_DID.md
 
 ---
 
-## 💡 Советы
+## Примечания
 
 ### Если потерялся
 → Открой **[UPGRADE_SUMMARY.md](./UPGRADE_SUMMARY.md)** — там всё кратко и по делу

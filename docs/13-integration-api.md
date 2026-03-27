@@ -41,7 +41,7 @@
 ## 1. Admin Service API
 
 **Base URL**: `http://localhost:8010`  
-**Auth**: JWT Bearer (`Authorization: Bearer <token>`) или `X-Service-Key`
+**Auth**: browser/admin flow через cookie session или JWT Bearer; M2M flow через отдельный `X-Service-Key`
 
 ### 1.1 Аутентификация
 
@@ -49,15 +49,11 @@
 |-------|----------|------|----------|
 | `POST` | `/auth/login` | — | Email + password → JWT |
 | `POST` | `/auth/bootstrap` | Bootstrap-токен | Первый owner аккаунт |
-| `POST` | `/auth/one-time-link` | X-Service-Key | Одноразовая ссылка |
-| `POST` | `/auth/token-login` | — | Обмен одноразового токена → JWT |
-| `POST` | `/auth/auto-provision` | X-Service-Key | Автосоздание из Telegram |
+| `POST` | `/auth/one-time-link` | `ADMIN_ONE_TIME_KEY` | Одноразовая ссылка |
+| `POST` | `/auth/token-login` | — | Обмен одноразового токена → cookie session |
+| `POST` | `/auth/auto-provision` | `ADMIN_ONE_TIME_KEY` | Автосоздание из Telegram |
 
-```json
-POST /auth/login
-{ "email": "admin@example.com", "password": "pass" }
-→ { "access_token": "eyJ...", "token_type": "bearer" }
-```
+`POST /auth/login` поднимает `HttpOnly` cookie session; JSON содержит только технический статус cookie-session flow и не отдаёт bearer token в JS.
 
 ### 1.2 Пользователи
 
@@ -181,7 +177,12 @@ POST /auth/login
 
 ### 1.11 M2M интеграция (Service-to-Service)
 
-Для внешних сервисов используется `X-Service-Key` вместо JWT.
+Для внешних сервисов используется отдельный `X-Service-Key`, который должен быть равен `ADMIN_INTEGRATION_SERVICE_KEY`.
+
+Важно:
+
+- `ADMIN_INTEGRATION_SERVICE_KEY` не должен использоваться для `/auth/one-time-link`;
+- `ADMIN_ONE_TIME_KEY` не должен использоваться для `/integrations/*`.
 
 | Метод | Endpoint | Auth | Описание |
 |-------|----------|------|----------|

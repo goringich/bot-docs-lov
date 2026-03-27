@@ -1,6 +1,10 @@
-# Production-Ready Upgrade Checklist
+# Production Upgrade Checklist
 
-## ✅ Completed Features
+Статус: `historical`
+
+Назначение: исторический checklist апгрейда `v2.0`. Для текущего состояния системы использовать `[[changelog/implementation-status]]`, `[[changelog/known-issues]]` и `[[14-api-reference]]`.
+
+## Completed Features
 
 ### 1. Database Schema
 - [x] Added `bot_settings` table for bot configuration
@@ -43,7 +47,7 @@
 - [x] Updated `README.md` with new features overview
 - [x] Created this checklist for tracking
 
-## 🔄 In Progress (Optional)
+## In Progress (Optional)
 
 ### AI Integration
 - [ ] Wire AI OrderRecognizer into worker.py main loop
@@ -57,7 +61,7 @@
 - [ ] Excel file preview in UI (using SheetJS/ExcelJS)
 - [ ] Automatic backup system
 
-## 📋 Testing Checklist
+## Testing Checklist
 
 Before deployment:
 - [ ] Run migration in Docker: `docker exec tg_orders_mysql mysql...`
@@ -69,7 +73,7 @@ Before deployment:
 - [ ] Verify bot responds with new compact messages
 - [ ] Check analytics charts render correctly
 
-## 🚀 Deployment Steps
+## Deployment Steps
 
 1. **Build new images**: 
    ```bash
@@ -98,7 +102,7 @@ Before deployment:
    docker compose logs -f worker admin_service admin_web
    ```
 
-## 📊 Key Metrics
+## Key Metrics
 
 - **Code Changes**: ~1500 lines added/modified
 - **New Files**: 3 (migration, checklist, updated docs)
@@ -106,7 +110,7 @@ Before deployment:
 - **UI Components**: 1 major update (SettingsPage with real API)
 - **Database Tables**: +2 (bot_settings, pickup_places)
 
-## 🎯 Success Criteria
+## Success Criteria
 
 - ✅ Admin can change bot settings without code/env changes
 - ✅ Admin can manage pickup places from UI

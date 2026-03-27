@@ -21,9 +21,17 @@
 
 Основные режимы авторизации:
 
-- `Authorization: Bearer <jwt>` — основной admin flow
-- `X-Service-Key: <key>` — межсервисные integration route-ы
+- browser session через `HttpOnly` cookie `admin_access_token` — основной admin-web flow
+- `Authorization: Bearer <jwt>` — совместимый backend/test flow
+- `X-Service-Key: <key>` — межсервисные integration route-ы или one-time-link flow, но с разными ключами
 - `X-Password-Confirm-Token: <token>` — step-up подтверждение для чувствительных export route-ов
+
+Для cookie-auth mutating запросов backend требует совпадающий `Origin` или `Referer` с `ADMIN_WEB_URL`. Это часть CSRF hardening слоя.
+
+Разделение ключей:
+
+- `ADMIN_ONE_TIME_KEY` — только `/auth/one-time-link` и `/auth/auto-provision`
+- `ADMIN_INTEGRATION_SERVICE_KEY` — только `/integrations/*`
 
 ## Как читать этот manual
 
@@ -38,11 +46,11 @@
 
 ## Auth & Sessions
 
-- `POST /auth/login` — вход по email + password
+- `POST /auth/login` — вход по email + password, выставляет cookie session и возвращает статус без bearer token
 - `POST /auth/one-time-link` — magic link для service-key flow
-- `POST /auth/token-login` — обмен one-time token на JWT
+- `POST /auth/token-login` — обмен one-time token на cookie session, без bearer token в response body
 - `POST /auth/auto-provision` — автосоздание/связка admin-user по integration flow
-- `POST /auth/confirm-password` — выдать step-up token для чувствительных действий
+- `POST /auth/confirm-password` — выдать step-up token для чувствительных действий вроде export и password reset
 - `POST /auth/logout` — завершить текущую сессию
 - `GET /auth/sessions` — список активных сессий
 - `DELETE /auth/sessions/{session_id}` — отозвать одну сессию
@@ -54,6 +62,7 @@
 - `GET /users` — список пользователей в видимом scope
 - `POST /users` — создать пользователя
 - `GET /users/{user_id}` — детали пользователя
+- `PUT /users/{user_id}/password` — owner-only сброс пароля, требует step-up token
 - `PUT /users/{user_id}/status` — активировать/деактивировать пользователя
 - `PUT /users/{user_id}/roles` — обновить роли
 - `PUT /users/{user_id}/delegate-create` — дать/снять право создавать пользователей
@@ -62,7 +71,7 @@
 - `DELETE /users/{user_id}` — удалить пользователя
 - `GET /regions/all` — справочник известных регионов
 - `GET /users/full` — расширенный owner-only список пользователей
-- `POST /users/{user_id}/invite-link` — создать invite-link
+- `POST /users/{user_id}/invite-link` — создать single-use invite-link
 - `GET /roles` — список ролей
 - `POST /roles` — создать новую роль
 - `GET /permissions` — список permission keys
@@ -214,6 +223,8 @@
 3. Перейди в `admin-web/src/api/apiCatalog.ts` и найди descriptor по `id` / `path`.
 4. Если нужен практический пример фронтового вызова — смотри `admin-web/src/api/client.ts`.
 5. Если нужен расширенный контекст, ограничения RBAC и edge cases — смотри [[14-api-reference]].
+
+Для auth/integration hardening и операционного запуска смотри также [[24-admin-auth-and-integration-security-runbook]].
 
 ## Что здесь намеренно НЕ делается
 
