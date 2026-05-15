@@ -1,5 +1,646 @@
 # Decisions log
 
+## 2026-05-XX — reverse pack_hint: вес пользователя → количество упаковок
+
+**Context**: Пользователь писал "картошка фри 2.5 кг" для товара с `unit_hint="уп"` и `pack_hint="2.5 кг"`. Парсер видел `unit="кг"` и не применял никакой конвертации (прямая конвертация требует `unit in ("уп","шт")`), что приводило к "2.5 кг" в экспорте при ожидаемом "1 уп".
+
+**Root cause**: `_normalize_qty_for_catalog()` имела только прямую конвертацию (уп/шт × pack_weight → weight). Обратная (weight / pack_weight → count) отсутствовала.
+
+### Решение
+
+Добавлен `elif`-блок в `_normalize_qty_for_catalog()` (`backend/app/domain/order_domain.py`):
+- Срабатывает когда `unit in ("кг","г","л","мл")` (пользователь явно написал вес/объём) **И** `unit_hint in _DEFAULT_SINGLE_QTY_UNITS` ("уп","шт","банка") **И** `catalog_item.pack_hint` задан.
+- Оба значения нормализуются в базовые единицы (г или мл) через `to_base_unit()`, затем `count = user_weight / pack_weight`.
+- Примеры: "2.5 кг" при pack_hint "2.5 кг" → "1 уп"; "5 кг" → "2 уп"; "200 г" при pack_hint "200 гр" → "1 уп".
+
+**Ограничение**: голое число без единицы (напр. "2.5") при `unit_hint="уп"` по-прежнему интерпретируется как "2.5 уп" — это недетерминированный случай (может означать и кол-во паков, и вес).
+
+## 2026-05-XX — respect_user_aliases: пользователь может удалять авто-алиасы через UI
+
+**Context**: При сохранении товара в каталоге через PATCH `/catalogs/{id}/items/{item_id}` с явно указанным полем `aliases` функция `_merge_aliases()` всегда добавляла автоматически сгенерированные алиасы из `_build_auto_aliases(title)`. Это означало, что пользователь не мог удалить широкий alias (например, "нерки" у позиции "ИКРА НЕРКИ с/м 0.2"), т.к. система его тут же возвращала.
+
+**Root cause**: `_build_auto_aliases("ИКРА НЕРКИ с/м 0.2")` возвращает список слов из title, включая "нерки". `_merge_aliases` всегда добавлял auto_parts поверх user_parts.
+
+### Решения
+
+1. **`_merge_aliases(respect_user_aliases=True)`**: добавлен параметр. Когда `True` и `user_aliases is not None`, auto_parts не добавляются. Пользователь получает ровно то, что написал (плюс исторические алиасы).
+
+2. **PATCH endpoint**: передаёт `respect_user_aliases=(payload.aliases is not None)`. Если пользователь явно поставил aliases = "...", auto-aliases не добавляются. Если aliases не пришёл в PATCH (пользователь обновлял только price/unit), поведение прежнее.
+
+3. **Data fix**: `ИКРА НЕРКИ с/м 0.2` (catalog_id=9, id=1850) — alias "нерки" удалён напрямую из DB. Алиас был корнем бага "6 штук нерки" в заказе 3342: три разные строки ("Φиле нерки 4 б", "Нерка слабосоленая 1 шт", "Икра нерки 1 б") одновременно матчились в один item через слишком широкий единственный alias, давая агрегат 4+1+1=6 при показе в admin-ui.
+
+### Consequences
+
+- Пользователь может убрать авто-генерированный alias через UI — он ОСТАЁТСЯ убранным.
+- Предыдущее поведение (auto-aliases) сохраняется, если пользователь не трогает поле aliases в PATCH.
+- Для CREATE endpoint поведение не изменилось (там не передаётся `respect_user_aliases`).
+
+## 2026-05-XX — price visibility: showPrice=false по умолчанию; gate в LinkAliasDialog
+
+**Context**: `ui_show_price = "false"` в `bot_settings`, но цена отображалась в каталогах из-за двух ошибок:
+1. `useState(true)` в CatalogsPage → flash показа цены до загрузки settings
+2. В `LinkAliasDialog` `option.price_text` рендерился без проверки `showPrice`
+
+### Решения
+
+- `CatalogsPage`: `useState(false)` для `showPrice` — безопасный дефолт (скрыто до подтверждения из settings).
+- `LinkAliasDialog`: добавлен проп `showPrice?: boolean` (дефолт `false`); `option.price_text` под guard.
+- `.catch(() => {})` заменён на `.catch((err) => console.warn(...))` чтобы ошибки загрузки settings были видимы.
+
+## 2026-05-07 — roe-class guard: "Нерка сл.сол" и "Нерка" больше не матчатся в "ИКРА НЕРКИ"
+
+**Context**: Три живых заказа: 505 (Ирина 2261), 514 (Татьяна 4076) и 513. Все три содержали строки с нерки, которые матчились неверно. В предыдущей итерации был добавлен title-class conflict-check (`fillet vs roe` → block), что починило `Φиле нерки → ИКРА НЕРКИ`. Но оставался кейс: `Нерка сл.сол` → тоже матчилась в ИКРА НЕРКИ через alias `нерки` (species-name без продуктового класса) в alias-loop и через step-5 word-overlap.
+
+### Решения
+
+1. **Alias loop (step 0)**: добавлен roe-специфический guard — если title продукта имеет класс `roe` ("икра"), а fragment и alias не несут `roe` класс, alias-match блокируется при score < 900. Намеренно узкий: только `roe` требует явного упоминания "икра" в запросе; другие классы (`fillet`, `canned`, `steak`) — это лишь способ приготовления, клиент вправе писать только вид рыбы.
+
+2. **Step-5 word-overlap**: тот же guard применён в дешёвом fuzzy-scoring. `Нерка сл.сол` больше не накапливала score через shared word `нерка` с `Икра нерки`.
+
+3. **Title-check refinement**: существующий `_has_match_conflict(frag, title)` чек теперь override-ается когда alias несёт тот же класс, что и fragment. Это устраняло ложный конфликт `Φиле нерки с палтусом малосольное` → `Ассорти нерка + палтус м/с` (fillet ≠ assorti → false conflict), который был pre-existing регрессией. Логика: если alias говорит то же, что и fragment, title′s класс не должен перебивать.
+
+4. **Regression tests**: добавлен `test_nerka_slabosol_does_not_match_ikra_nerki_via_species_alias` в `test_parser_user_reported_regressions.py`.
+
+### Consequences
+
+- `Нерка сл.сол`, `Нерка свежая`, generic `нерка` — больше не попадают в `ИКРА НЕРКИ`.
+- `Φиле нерки`, `икра нерки` — продолжают матчиться верно (через product-class check `roe` == `roe`).
+- `Горбуша в с/с`, `Φиле нерки с палтусом малосольное` через ассорти — работают корректно (guards не применяются для non-roe классов).
+
+## 2026-05-05 — parser ignores address shards like `д. 6`, and alias matching respects item class conflicts
+
+**Context**: На живых заказах всплыли два неприятных silent-bad-parse кейса. Во-первых, строка заголовка вроде `Инесса 1921, Белякова, д. 6` разбивалась по запятым, и фрагмент `д. 6` ошибочно проходил как товарная строка (`title_raw="д"`, `qty=6`) с дальнейшим fuzzy-match в каталог. Во-вторых, alias-path мог матчить `Филе нерки` в товар `Икра нерки`, если у позиции икры был слишком общий alias вроде `нерки`: conflict-check смотрел только на alias-токены, но не на product class самого title товара.
+
+### Решения
+
+- В `backend/app/domain/order_domain.py::_is_meta_fragment()` добавлен явный guard для адресных осколков после comma-split: `д. 6`, `кв. 3`, `корп. 2`, `стр. 1`, `офис 5` и подобные фрагменты теперь всегда считаются metadata, а не товаром.
+- В `backend/app/repo/catalog_repo.py::match_catalog_item_from_items()` alias-match теперь проверяет конфликт не только между fragment и alias, но и между fragment и `CatalogItem.title`. Это не даёт generic alias вроде `нерки` переопределять product class (`филе` vs `икра`).
+- Добавлены регрессионные тесты на оба кейса в `backend/tests/test_parser_user_reported_regressions.py`.
+
+### Consequences
+
+- Адресные куски из header-line больше не протекают в `order_lines` как фейковые товары.
+- Матчинг по alias остаётся гибким, но перестаёт склеивать разные продуктовые классы только из-за общего корня слова.
+
+## 2026-05-01 — fuzzy template matching: 3-char abbreviations + empty-export guard
+
+**Context**: Экспорт возвращал пустой файл по нескольким причинам:
+1. Matcher требовал оба слова ≥ 4 символа для prefix-сравнения. Заголовки шаблона «СОС», «СИР», «КЕД» (3 символа) не матчились с «сосновом», «сиропе», «кедровый». В итоге «Брусника в сосновом сиропе» и «Кедровый орех в кедровом сиропе» давали score 0 и не попадали ни в одну колонку.
+2. Generic-word guard (`bool(cg) != bool(hg) and shared_non_generic ≤ 1 → 0.0`) блокировал «Кедровый орех» ← «КЕД ОР В КЕД СИР шт» потому что «орех» ∈ GENERIC_WORDS, а header-аббревиатура «ОР» (2 символа) вообще не попадала в match_words.
+3. Пустой экспорт (0 заказов под фильтр) возвращал валидный XLSX с одной строкой заголовков — оператор не понимал, баг это или пустой результат.
+
+### Решения
+
+- **`_template_word_similarity`**: добавлена ветка для 3-char prefix-matching (shorter ≥ 3, longer ≥ 5, `longer.startswith(shorter)`) → score 0.88.
+- **`_template_similarity_score`**: generic-word guard теперь lazy-вычисляет fuzzy overlap для non-generic слов; если хотя бы одна пара слов fuzzy-матчится ≥ 0.78, guard не блокирует.
+- **Penalty за size-variant headers**: заголовки с числами (0.5, 125 и т.п.), когда кандидат их не содержит, штрафуются ×0.85 в fuzzy-ветке — «ОРЕХ КЕДР 0.5 шт» больше не бьёт «КЕД ОР В КЕД СИР шт» для «Кедровый орех в кедровом сиропе».
+- **Empty-export guard**: все три template-export эндпоинта (`/export-template`, `/export-template-strict`, `/export-template-distribution`) теперь возвращают HTTP 404 с понятным сообщением вместо пустого XLSX.
+
+### Tests
+
+- `test_template_header_matching_covers_reference_headers`: теперь проходит без падения для «Брусника» и компании (ранее 1 fail).
+- Новые тесты: `test_template_similarity_3char_abbreviated_headers`, `test_abbreviated_header_beats_size_variant_for_same_product`, `test_empty_export_returns_404_not_empty_xlsx`.
+- Переименован `test_distribution_export_with_catalog_and_chat_filters_returns_valid_empty_xlsx` → `*_returns_404_for_empty_result`.
+- Итого: 55 passed, 0 failed.
+
+### Consequences
+
+- Больше продуктов с аббревиатурами в заголовках шаблона попадают в нужные колонки при экспорте.
+- Пустой экспорт сразу виден как ошибка, а не как «прозрачный» пустой файл.
+- Производительность не пострадала: fuzzy overlap считается только один раз на пару (candidate, header), computationally bounded O(n*m) где n,m ≤ 10 слов.
+
+
+
+**Context**: На живых данных создавалось ощущение, что заказы за 06–20 апреля «пропали». Данные в БД были на месте, но UI страницы `Заказы` строил пагинацию эвристикой `data.length === PAGE_SIZE ? page + 1 : page`, а backend убирал технические `rejected`-строки уже после `limit/offset`. В итоге список мог показывать неполные страницы и не давать оператору ясного количества доступных заказов.
+
+### Решения
+
+- `GET /orders` теперь считает реальный total после всех бизнес-фильтров и отдаёт его в header `X-Total-Count`.
+- Технические `rejected`-записи вида `message no longer qualifies as order` исключаются на SQL-уровне **до** расчёта total и до пагинации.
+- `OrdersPage` переключён на серверный total и больше не угадывает число страниц по размеру текущего чанка.
+
+### Consequences
+
+- Список заказов показывает предсказуемую пагинацию даже на больших исторических диапазонах.
+- Служебные rejected-сообщения больше не «съедают» места на страницах и не создают ложное впечатление потери заказов.
+
+## 2026-04-28 — runtime parser no longer mutates catalog from admin-feed messages
+
+**Context**: В runtime worker оставалась нарушающая архитектуру связка: startup/online catalog-heal читали admin-feed сообщения, находили «недостающие» товары и автоматически вставляли их в `catalog_items`. Это ломало ключевой инвариант проекта: каталог должен быть источником истины для парсера, а не объектом, который парсер/worker переписывает по сообщениям.
+
+### Решения
+
+- В `backend/app/worker/catalog_heal.py` и legacy worker убрана runtime-вставка товаров в каталог из admin-feed.
+- Startup reparse сохраняется, но теперь он только перепарсивает сохранённые заказы по **текущему** каталогу (`reprocess_problem_orders(..., reprocess_all=True)`).
+- Online admin-feed сообщения по-прежнему помечаются как служебные и не проходят как клиентские заказы, но больше не могут автоматически расширять каталог.
+- Ручной sync/catalog maintenance остаётся отдельной операцией; parser использует уже существующие `CatalogItem` / aliases как source of truth.
+
+### Consequences
+
+- Runtime больше не создаёт скрытых каталожных drift-ов из чата.
+- Если товар отсутствует в каталоге, заказ остаётся `partial`/`unknown_item` до явного обновления каталога, вместо тихого автодобавления позиции.
+- Поведение parser/replay/export становится предсказуемым: сначала обновляется каталог, потом orders перепарсиваются относительно него.
+- Debug/admin reprocess-инструменты тоже переведены в order-only режим: они больше не умеют досоздавать каталог из `tg_updates`, а manual `import-text` стал каноническим способом обновить каталог и сразу перепарсить заказы.
+
+## 2026-04-28 — template exports keep original order message in the summary column
+
+**Context**: В шаблонных XLSX-экспортах (`export-template`, `export-template-strict`, `export-template-distribution`) четвёртая колонка визуально выглядела как «Заказ / Состав заказа», но фактически туда записывался пересобранный summary по распарсенным `order_lines`. Для операторов это ломало ожидание: при ручном текстовом вводе или исторических alias-совпадениях экспорт показывал не исходное сообщение клиента, а синтетическую интерпретацию.
+
+### Решения
+
+- Для всех template-based export режимов колонка `Заказ / Состав заказа` теперь заполняется из `orders.raw_text`, если он есть.
+- Синтетическая сборка по `order_lines` оставлена только как fallback на случай старых/неполных записей без `raw_text`.
+- Товарные числовые колонки остаются catalog-driven и по-прежнему строятся по распарсенным строкам заказа, чтобы не потерять операционную раскладку по шаблону.
+
+### Consequences
+
+- XLSX показывает оператору ровно то сообщение, которое пришло от клиента, вместо «пересказа» системы.
+- Ручные текстовые кейсы и исторические заказы стали понятнее при сверке с оригиналом, без потери catalog-driven числового экспорта.
+
+## 2026-04-28 — catalog-backed template export no longer derives units from message/header text
+
+**Context**: После ужесточения правил экспорта оставалась переходная ветка, где template/distribution export для catalog-backed строки всё ещё мог смотреть на внешний header (`1200 Г`) или формулировку сообщения и трактовать количество в этих единицах вместо единицы каталога.
+
+### Решения
+
+- Для любой строки, связанной с `catalog_item` / SKU, экспортное количество теперь считается только через каталог (`unit_hint`, `pack_hint`) и нормализованное значение строки заказа.
+- Внешний Excel header и текст сообщения могут помогать только найти нужную колонку, но больше не участвуют в выборе единицы измерения в export.
+- Старую header-aware qty conversion для catalog-backed строк убрали, чтобы исключить возврат к `1200` вместо `1.2 кг` и похожим искажениям.
+
+### Consequences
+
+- Шаблонный export стал единообразным: одинаковый SKU всегда попадает в XLSX в одной и той же единице каталога.
+- Числовые фрагменты в названии товара и в заголовке шаблона перестали влиять на семантику количества.
+
+## 2026-04-28 — exact-title distribution export now follows catalog units, not weight fragments in header text
+
+**Context**: Повторная проверка реального distribution XLSX по апрельским каталогам показала смешение двух разных источников правды. Заголовки уже совпадали с каталогом 1:1, но export всё ещё местами ориентировался на числовые куски текста в header (`125ГР`, `1200 Г`) и мог отдавать несовместимые значения для дискретных позиций вроде `ФИЛЕ УГРЯ` (`уп`) как `1.5` или `0.5`.
+
+### Решения
+
+- Для template/distribution export закреплено правило: если товарная колонка совпадает с каталожным заголовком, источником истины считается каталог (`title`, `unit_hint`, `pack_hint`), а не весовые фрагменты, встроенные в текст названия.
+- Нормализация количества в `admin_service/app/api/routers/orders.py` больше не должна silently переименовывать несовместимое mass-количество в дискретную единицу каталога.
+- Для дискретных каталожных единиц (`шт/уп/банка`) export пишет только безопасно совместимые целые значения; несовместимые или дробные псевдо-упаковки не должны загрязнять числовую колонку.
+- В проектных инструкциях и docs дополнительно зафиксировано, что source of truth для каталога — вставленный текст импорта, а после создания каталога вручную допускается расширять только алиасы.
+
+### Consequences
+
+- Distribution XLSX остаётся синхронным с каталогом не только по заголовкам, но и по единицам учёта.
+- Вес/фасовка внутри названия товара остаются частью naming, а не скрытой командой переписать export в граммы.
+- Операторы больше не получают ложные значения вроде `1.5` в колонке дискретной позиции, если безопасного преобразования к единице каталога нет.
+
+## 2026-04-28 — April historical order audit hardened parser against inline metadata drift and descriptor splits
+
+**Context**: Повторный аудит реальных заказов за 2026-04-06..2026-04-12 показал, что после базовых parser-fix ещё оставались «тихие» misparse-кейсы: typo в строке точки выдачи мог превращаться в товар, inline `дозаказ` без явного qty тянул в `title_raw` имя/телефон, а строка вида `Кета, мороженая 1 шт. Скумбрия ...` рвала descriptor-хвост от первой позиции и загрязняла вторую.
+
+### Решения
+
+- В `backend/app/domain/order_domain.py` добавлен fuzzy guard для строк точки выдачи, чтобы typo-адреса не проходили как товарные фрагменты.
+- Inline-header cleanup расширен на `дозаказ`-строки, где после метаданных идёт только товарный хвост без явного количества.
+- Merge-логика order fragments теперь умеет приклеивать descriptor + qty (`мороженая 1 шт`) обратно к предыдущему товару, если после этого сразу начинается следующая товарная строка.
+- В `backend/app/repo/catalog_repo.py` закреплена нормализация сокращённых каталожных заголовков (`сем`, `медаль`, `заб`, `североатл`, и т.д.) против нормальной клиентской формулировки.
+
+### Consequences
+
+- Исторические «silent bad parse» кейсы перестают маскироваться под `active` заказы с неправильными строками.
+- Реальный апрельский аудит заметно очищается: меньше `partial/unknown_item`, больше корректно собранных `active` заказов без ручного добора.
+
+## 2026-04-28 — order classifier no longer accepts identity-only messages
+
+**Context**: В живом чате обычные сообщения с одними метаданными клиента (`имя + последние 4 цифры`, иногда ещё и точка выдачи) могли проходить эвристику `looks_like_order(...)` без товарной части. Из-за этого нейтральный чат вроде `Елена 2063` ошибочно сохранялся как заказ.
+
+### Решения
+
+- В `backend/app/domain/order_domain.py` добавлен ранний guard: metadata без product-signal и без price-list структуры больше не считается заказом.
+- Существующее исключение для коротких customer price-list сообщений оставлено рабочим: там по-прежнему нужен полноценный identity + продуктовые строки.
+- Добавлены регрессионные тесты для `Елена 2063`, `Елена 2063 ТЦ Марс` и `Елена 2063 там сообщение обычное`.
+
+### Consequences
+
+- Обычные сообщения больше не попадают в `orders` только из-за имени/телефона.
+- Реальные заказы с товарами, количеством и price-only customer list не теряют поддержку.
+
+## 2026-04-28 — catalog heal now reparses active orders, not only problematic ones
+
+**Context**: Исправления parser/matcher сами по себе не меняют уже сохранённые `order_lines`. В реальном сценарии это давало ложное ощущение «ничего не поменялось»: код уже умел лучше распознавать строки, но старые `active` заказы оставались со старой разметкой, а export продолжал опираться на устаревшие данные.
+
+### Решения
+
+- Startup catalog-heal в `backend/app/worker/catalog_heal.py` и legacy worker теперь вызывает `reprocess_problem_orders(..., reprocess_all=True)`, то есть перепарсивает и `active` заказы тоже.
+- Online catalog-heal при появлении новых товаров из admin-feed расширяет репроцесс до `active` заказов, если каталог реально дополнился новыми позициями.
+- Статистика `reprocess_problem_orders()` теперь считает `updated` по фактическому изменению состояния заказа/строк, а не только по смене верхнеуровневого статуса.
+
+### Consequences
+
+- После деплоя parser-fix или появления новых каталожных позиций корректировки действительно доходят до уже сохранённых заказов и экспорта.
+- Логи heal-flow больше не занижают объём реально изменённых заказов, если статус остался `active`, но `order_lines` были переписаны.
+
+## 2026-04-28 — parser now hardens OCR/typo edge-cases and keeps discrete catalog units in exports
+
+**Context**: В живых заказах появились повторяющиеся проблемы: товарные строки с опечатками (`сельдб`, `укгря`, `вяленная`) не совпадали с каталогом, OCR-вариант `o.5кг` трактовался как `5 кг`, а дискретные позиции с `pack_hint` (например, икра) иногда конвертировались в граммы, что искажало выдачу и экспорт.
+
+### Решения
+
+- В parser normalizer (`backend/app/parser/text_parser.py`) расширена OCR-нормализация `o/о` перед десятичным разделителем: теперь поддерживаются и `,` и `.` (`o,5` / `o.5` → `0,5` / `0.5`).
+- В catalog typo-map (`backend/app/repo/catalog_repo.py`) добавлены рабочие коррекции из живых кейсов: `сельдб→сельдь`, `укгря→угря`, `вяленная→вяленая`.
+- В `_normalize_qty_for_catalog()` (`backend/app/domain/order_domain.py`) pack-конверсия (`уп/шт` × `pack_hint`) ограничена только весовыми/объёмными unit_hint (`кг/г/л/мл`). Для дискретных позиций (`уп/шт/банка`) количество сохраняется дискретным и не уходит в граммы.
+- Базовый словарь product keywords дополнен частыми позициями (`омуль`, `угорь/угря`, `чука`) как fallback при слабом каталожном контексте.
+
+### Consequences
+
+- Снижен процент «тихих» промахов по живым опечаткам в заказах.
+- Дробные веса из OCR не раздуваются в 10 раз.
+- В Excel/выдаче дискретные позиции больше не искажаются в граммы из-за `pack_hint`.
+
+## 2026-04-27 — operational export excludes technical non-order rejected messages
+
+**Context**: В рабочем диапазоне 06–12 апреля в XLSX попадали сервисные записи со статусом `rejected` и ошибкой `message no longer qualifies as order`. Это не клиентские заказы, а технические сообщения из чата (например, отзывы/комментарии), которые не должны загрязнять операционный экспорт.
+
+### Решения
+
+- В `admin_service/app/api/routers/orders.py` добавлен фильтр `_is_technical_rejected_non_order(...)`.
+- `GET /orders/export` исключает такие строки из выборки перед построением листов `Заказы`, `Позиции`, `Сводка по товарам`, `По точкам`.
+- Для уже сохранённых проблемных заказов выполнен целевой `catalog-reprocess` и точечная нормализация алиасов каталога (кейс `Балык из карельс. форели`) для корректной повторной классификации.
+
+### Consequences
+
+- В операционном XLSX остаются только реальные заказы; технические rejected-сообщения не мешают выдаче.
+- После репроцесса снижается доля `partial` из-за устаревшего парсинга старых сообщений.
+
+## 2026-04-27 — unit normalization unified: catalog.unit_hint stores lowercase to match backend parser
+
+**Context**: Catalog items imported from text (e.g., "КИЖУЧ с/м ШТ") now correctly normalize unit into backend-compatible lowercase format. Previously, units were stored uppercase ("КГ", "ШТ", "УП"), causing mismatch when evaluating parsed order quantities against catalog: backend parser normalizes to lowercase ("кг", "шт", "уп"), leading to unit_hint comparison failures in `_normalize_qty_for_catalog()`.
+
+### Solution
+
+- Changed `_UNIT_PATTERNS` in `admin_service/app/api/routers/catalogs.py` to return lowercase units:
+  - "КГ" → normalize to "кг" (not "КГ")
+  - "ШТ" → normalize to "шт" (not "ШТ")
+  - "УП" → normalize to "уп" (not "УП")  
+  - "Ж/Б" → "шт", "КАПС" → "уп"
+- API returns uppercase display units (`_display_unit`) for UI/export; internally stored lowercase for consistency with parser.
+
+### Consequences
+
+- Catalog items now correctly match parsed orders regardless of quantity specification (implicit, explicit, from unit_hint);
+- Products like Кижуч, Горбуша, etc. with missing qty now infer "1 шт" correctly;
+- Excel export shows proper unit display (ШТ, КГ, etc.) via `_display_unit()` filter.
+
+## 2026-04-17 — prebuild guard now blocks compose build/restart when catalogs or POST preflight regressions fail
+
+**Context**: Повторяющиеся `500` на каталожных endpoint-ах (`/catalogs`, `/catalogs/{id}/items`) показали, что точечный фикс без обязательного prebuild-gate недостаточен: при следующем изменении несовместимость схемы могла вернуться и всплыть уже в UI.
+
+### Решения
+
+- В `scripts/run_checks.sh` добавлен новый режим `catalogs-preflight`:
+  - `py_compile` для `admin_service/app/api/routers/catalogs.py`;
+  - regression test `admin_service/tests/test_catalogs_legacy_schema_compat.py`.
+- В `Makefile` добавлены:
+  - `make check-catalogs-preflight`;
+  - `make check-prebuild` (`check-post-preflight` + `check-catalogs-preflight`).
+- `compose-build` теперь зависит от `check-prebuild`, поэтому `make compose-build`, `make compose-restart` и `make sync` не проходят при регрессиях preflight.
+- Процедура закреплена в проектных инструкциях (`.github/copilot-instructions.md`) и эксплуатационной документации (`README.md`, `docs/08-admin-flows.md`).
+
+### Consequences
+
+- Регрессии по POST-контракту и legacy-schema каталогов ловятся до сборки/рестарта, а не после в UI.
+- Сборочный процесс стал fail-fast по критичным runtime-сценариям.
+
+## 2026-04-17 — catalogs read-path supports legacy `chats.tg_chat_id` and minimal `catalog_items` shape
+
+**Context**: В боевых legacy-инсталляциях часть схем оставалась в старом формате: `chats` хранил публичный чат как `tg_chat_id` (без `chat_id`), а `catalog_items` мог не иметь `is_active` и stop-полей. Это приводило к runtime `500` на `GET /catalogs` и `GET /catalogs/{id}/items` при загрузке админ-страницы каталогов.
+
+### Решения
+
+- В `catalogs` router добавлен runtime fallback для публичного chat-id: сначала `chats.chat_id`, затем `chats.tg_chat_id`, и только потом fallback на `catalogs.chat_id`.
+- Для read-path каталогов (`list/get/bootstrap`) добавлены безопасные optional-column выражения, чтобы отсутствие отдельных legacy-колонок не роняло endpoint.
+- Для `GET /catalogs/{id}/items` добавлен fallback: если `is_active` отсутствует, API возвращает `is_active=1` и не добавляет фильтр `is_active` в SQL.
+- Добавлен regression test на «very legacy» форму таблиц (`chats.tg_chat_id` + `catalog_items` без `is_active`), покрывающий оба endpoint-а.
+
+### Consequences
+
+- Страница каталогов перестаёт падать с `500` на старых схемах до ручной миграции.
+- API-контракт остаётся стабильным: фронтенд продолжает получать `chat_id` и `is_active` даже на legacy БД.
+
+## 2026-04-15 — catalog copy auto-deduplicates item codes to prevent create/clone runtime failures
+
+**Context**: `POST /catalogs` (и clone flow) могут копировать позиции из прошлого каталога. В реальных данных встречаются дубли `sku/item_code` внутри source-каталога (legacy/import/manual drift), что приводило к runtime-падениям на вставке в новый каталог и к `500` в UI.
+
+### Решения
+
+- В `_copy_catalog_items` перед вставкой каждая позиция теперь проходит через `_ensure_unique_item_code(...)` для target-каталога.
+- Если исходный код пустой/грязный, база для кода строится из title (`_build_item_code_base`), затем уникализируется suffix-логикой (`-01`, `-02`, ...).
+- Добавлен regression test: при копировании source-каталога с дублями кодов новый каталог создаётся успешно, а коды в target становятся уникальными.
+
+### Consequences
+
+- Создание/клонирование каталога перестаёт падать на data edge-cases с дублями item code.
+- Поведение остаётся backward-compatible для нормальных source-данных и legacy-схем.
+
+## 2026-04-14 — catalog creation/stop flows ignore optional stop columns on legacy `catalog_items`
+
+**Context**: После фикса чтения и text-import для старых схем оставался ещё один runtime-edge-case: `POST /catalogs` мог падать на legacy-таблицах `catalog_items`, где нет `stop_reason` и/или `stop_until`. Причина — copy/stop write-path всё ещё пытался писать в отсутствующие столбцы.
+
+### Решения
+
+- `catalogs` router теперь добавляет `stop_reason` и `stop_until` в insert/update payload только если эти колонки реально есть в отражённой таблице.
+- Тот же guard применён к `POST /catalogs`, clone/copy flow и stop/unstop item flow.
+- Добавлен regression test на `POST /catalogs` с legacy `catalog_items` (`item_code`, без `position_order`, без `stop_reason/stop_until`).
+
+### Consequences
+
+- Создание нового каталога с автокопированием из предыдущего перестаёт падать на старых БД.
+- Stop-поля остаются backward-compatible до ручной миграции инсталляции.
+
+## 2026-04-14 — Orders/Delivery Problems tabs become independently sysadmin-toggleable; catalog items API made legacy-schema compatible
+
+**Context**: Операторы просили, чтобы «Проблемы» в первую очередь относились к разделу заказов, а в выдаче оставались опцией. Параллельно в runtime всплыли `500` на `GET /catalogs/{id}/items` и `POST /catalogs/{id}/import-text` на инсталляциях со старой схемой `catalog_items` (без `position_order` и/или с `item_code` вместо `sku`).
+
+### Решения
+
+- Добавлен отдельный sysadmin-toggle `orders_show_problems_tab` для раздела `Orders`.
+- Существующий toggle `delivery_show_problems_tab` сохранён отдельно для `Delivery`.
+- `catalogs` router в `admin_service` переведён на runtime-совместимость со старой схемой `catalog_items`:
+  - fallback между `sku` и `item_code`;
+  - fallback при отсутствии `position_order`;
+  - fallback при отсутствии `stop_until`.
+- Добавлен regression test на legacy-форму `catalog_items` для `GET /catalogs/{id}/items` и `POST /catalogs/{id}/import-text`.
+
+### Consequences
+
+- Sysadmin может отдельно управлять вкладкой проблем в заказах и в выдаче.
+- Импорт и чтение позиций каталога перестали падать на старых БД до ручной миграции столбцов.
+
+## 2026-04-14 — Settings allowlist synchronized with frontend sysadmin toggles (export modes + people visibility)
+
+**Context**: В `DebugPage` и связанных view-model фронтенд отправляет системные toggle-ключи (`export_mode_*`, `people_show_*`) в `POST /settings`. Бэкенд-allowlist не содержал часть этих ключей, из-за чего реальные сохранения падали с `400 Invalid settings keys`.
+
+### Решения
+
+- Ключи `export_mode_template`, `export_mode_strict`, `export_mode_distribution`, `export_mode_flexible` и `people_show_*` добавлены в `SYSADMIN_UI_DEFAULTS`.
+- За счёт существующей композиции это автоматически синхронизировало:
+  - server allowlist (`ALLOWED_SETTINGS_KEYS`),
+  - safe-набор для non-owner чтения (`NON_OWNER_SETTINGS_KEYS`),
+  - дефолтные значения при `GET /settings`.
+- Добавлен regression test на `POST /settings`, который проверяет сохранение полного набора этих toggle-ключей.
+
+### Consequences
+
+- Сохранение sysadmin toggle-настроек из текущего frontend-контракта больше не ломается на валидации ключей.
+- Контракт frontend ↔ backend по системным toggle-ключам стал явным и покрыт автотестом.
+
+## 2026-04-14 — POST preflight becomes mandatory for risky auth/mutation changes; device fingerprint binding gets deterministic fallback
+
+**Context**: В реальных сессиях админки повторялась регрессия вида «POST снова падает после изменений» (особенно заметно на `/api/auth/login` и мутациях после cookie-login). Требовалась архитектурная защита не только кодом, но и процессом: чтобы risky изменения не проходили без обязательной preflight-проверки POST-контракта.
+
+### Решения
+
+- В `admin_service` auth-flow усилен fallback-механизмом для device binding:
+  - если `X-Device-Fingerprint` отсутствует, сервер детерминированно выводит fingerprint из request metadata (IP + User-Agent);
+  - та же логика используется при последующей проверке cookie-сессии, чтобы POST-поток не ломался из-за отсутствующего заголовка.
+- Добавлен регрессионный тест на сценарий cookie-auth POST-мутации без явного `X-Device-Fingerprint`.
+- В едином раннере проверок добавлен режим `post-preflight`, и в `Makefile` — команда `make check-post-preflight`.
+- Процесс зафиксирован в агентных/проектных инструкциях: любые изменения в `login/auth/cookie/CSRF/middleware` и mutating API считаются risky и требуют обязательного preflight перед завершением.
+- Добавлены `.llmignore` и `.copilotignore`, чтобы LLM/Copilot не тратил контекст на runtime-мусор и не затрагивал лишние артефакты.
+
+### Consequences
+
+- Риск повторных «тихих» поломок POST-контракта после локальных правок снижен за счёт обязательного узкого preflight-гейта.
+- Авторизация стала устойчивее в окружениях, где `X-Device-Fingerprint` может не приходить стабильно.
+- Проверка теперь встроена в стандартный operational flow (`make check-post-preflight`), а не зависит от ручной дисциплины.
+
+## 2026-04-14 — catalog text import and admin visibility toggles are treated as operational controls, not one-off UI hacks
+
+**Context**: Пользовательский сценарий для админки требует, чтобы оператор мог вставить сырой список позиций в каталог без ручного заведения каждой строки, при этом порядок позиций должен сохраняться строго как в исходном сообщении. Параллельно служебные поля (`SKU`, `ID каталога`, цена, исходный текст заказа, дата, проблемы, linked code) должны реально скрываться через настройки, а не просто существовать в конфиге без применения в боевых экранах.
+
+### Решения
+
+- `CatalogsPage` теперь монтирует `ImportTextDialog` и даёт явное действие **«Вставить текстом»** прямо в секции товаров каталога.
+- Импорт позиций из текста закреплён как order-preserving flow: сортировка в каталоге по умолчанию использует `position_order`, а backend сохраняет `position_order` и при ручном создании, и при clone/import в другой чат.
+- Скрытие служебных полей оформлено как реальные runtime-toggle правила:
+  - `SettingsPage` загружает и сохраняет `orders_show_source`, `orders_show_order_id`, `orders_show_linked_code`, `ui_show_sku`, `ui_show_price`, `ui_show_order_date`, `ui_show_order_problem`, `ui_show_catalog_id`, `delivery_show_order_status`;
+  - `CatalogsPage` и `OrdersPage` применяют эти флаги в live UI.
+- Сортировка заказов по точке выдачи реализована серверно (`sort_by=pickup_place`) и прокинута во frontend-фильтры, чтобы оператор работал не только через группировку по чату.
+
+### Consequences
+
+- Создание каталога из pasted text стало штатным операционным флоу, а не скрытой заготовкой в коде.
+- Порядок каталога стабилен между импортом, ручным добавлением и клонированием в другой чат.
+- Sysadmin/owner может реально убирать внутренние поля из повседневной работы операторов без кастомных правок кода.
+- Детали заказа и XLSX-выгрузки показывают единицы в source-style нотации (`КГ`, `Г`, `ШТ`, `УП`), чтобы оператор видел тот же формат, что и в исходных сообщениях.
+
+## 2026-04-07 — distribution export switched to catalog-driven completeness over strict 1:1 template columns *(later superseded for distribution mode)*
+
+**Context**: Пользователь подтвердил, что источник бизнес-данных для export — каталог/БД, а Excel-шаблон нужен только для внешнего вида. При режиме `export-template-distribution` часть позиций терялась, если шаблонная колонка не находилась 1:1.
+
+### Решения
+
+- Для `GET /orders/export-template-distribution` включён overflow fallback: если позиция из заказа/каталога не сматчилась в существующие template-колонки, справа добавляется новая колонка с названием позиции.
+- Это поведение закрепляет правило «данные из каталога/БД важнее ограничений шаблонной сетки» и убирает тихие потери строк.
+- Regression-тесты обновлены: теперь в distribution проверяется добавление overflow-колонки вместо `None` в несматченных кейсах.
+
+### Consequences
+
+- Distribution-файл может иметь дополнительные товарные колонки справа относительно исходного шаблона.
+- При этом позиции больше не пропадают из выгрузки из-за несовпадения заголовков шаблона.
+
+> Позже это решение было **отменено именно для `export-template-distribution`**: текущий инвариант — раздачный export не добавляет новые товарные колонки вне каталога и не должен выводить не-каталожные позиции.
+
+## 2026-04-07 — strict/distribution template matching combines catalog and line candidates
+
+**Context**: В выгрузках `export-template-strict` и `export-template-distribution` часть позиций могла не попадать в шаблонные колонки, хотя визуально заголовок в шаблоне соответствовал строке заказа. Кейс пользователя: `Сельдь олюторская с/м 5 кг` и `Филе хека (Аргентина) 1200 г` не записывались, когда каноническое название в каталоге имело другое обозначение фасовки/веса.
+
+### Решения
+
+- В strict/distribution подбор колонки теперь учитывает не только catalog-кандидаты, но и line-кандидаты (`title_raw/item_title/SKU`) в едином списке.
+- Приоритет catalog-driven matching сохранён, но line-текст больше не отбрасывается, если canonical-нотация каталога и header-нотация шаблона отличаются.
+- Добавлен regression test на сценарий различий в нотации (`... 1.2 кг` в каталоге vs `... 1200 г` в header).
+
+### Consequences
+
+- Меньше «тихих потерь» строк в distribution-экспорте.
+- Позиции из каталога-раздачи надёжнее попадают в целевые колонки даже при разных вариантах записи веса/фасовки.
+
+## 2026-04-07 — template-based Excel exports are flattened to a single clean worksheet
+
+**Context**: Пользовательский экспорт из живого Excel-шаблона всё ещё унаследовал визуальный и структурный шум оригинального файла: в выдаче оставались лишние листы (`СТОП,ПРИЗЫ`, `Траты`, conflict-листы), цветные template-заливки в header/body и хвостовые куски данных/таблиц далеко за рабочей областью листа (например, в районе `AL207`). Пользовательское ожидание — один аккуратный лист без цвета и без мусора, но с корректными данными заказа и итоговой строкой.
+
+### Решения
+
+- Для template-based export добавлен workbook-pruning helper, который оставляет только первый worksheet перед финальной выдачей файла.
+- После заполнения шаблонного листа вычисляется фактически используемая область и worksheet принудительно обрезается по реальным `last_row/last_col`.
+- Финальная стадия экспортов (`template`, `strict`, `distribution`) теперь сбрасывает template-derived fills/conditional formatting/table-noise в plain-оформление:
+  - без цветных header/body заливок,
+  - с единым тонким border,
+  - с читаемым bold header и plain body alignment.
+- Добавлен regression test на сценарий: цветной шаблон + лишние листы + хвостовой мусор в `AL207`.
+
+### Consequences
+
+- Пользователь получает один чистый Excel-лист вместо набора наследованных template-sheet'ов.
+- Цветовой шум исходного шаблона больше не протекает в экспорт.
+- Хвостовые таблицы/пустые колонки вне реальной рабочей области удаляются до сохранения файла.
+
+## 2026-04-07 — distribution template export keeps first-sheet layout strict and normalizes qty to catalog units
+
+**Context**: В рабочем `ExportPage` пользователи формируют раздачный шаблон через `export-template-distribution`, где первая страница должна оставаться 1:1 с загруженным Excel-шаблоном. Фактически в этом режиме могли появляться лишние товарные колонки (overflow), а количества записывались без приведения к единице каталога (`unit_hint`), из-за чего в ячейках оказывались «чужие» единицы относительно каталожного учёта.
+
+### Решения
+
+- В шаблонной записи количества добавлено приведение к единице каталога через `_normalize_qty_for_catalog_item(...)` перед заполнением ячеек.
+- Приведение учитывает `pack_hint`, поэтому сценарии вида `2 шт` при фасовке `500 г` и `unit_hint=кг` в выгрузке дают `1 кг`.
+- Для `GET /orders/export-template-distribution` отключено авто-добавление overflow-колонок: первая страница теперь сохраняет 1:1 раскладку шаблона.
+- Для `GET /orders/export-template-strict` поведение overflow сохранено (fallback-колонки допустимы), чтобы не терять позиции в strict-режиме, где это ожидаемый fail-safe.
+
+### Consequences
+
+- Раздачный шаблон перестал «расползаться» по колонкам на первой странице.
+- Значения в товарных колонках синхронизированы с единицами каталога, что упрощает сверку и итоговую выдачу.
+
+## 2026-04-07 — ExportPage переведена на view-model композицию и защищена от частичного API-контракта
+
+**Context**: В `admin-web` страница экспорта снова росла как orchestration-монолит: загрузка пресетов/справочников, sysadmin visibility-режимы, валидация owner password, запуск двух export-flow и большой JSX жили в одном файле. Дополнительно в тестовом/частично деградирующем runtime-контуре падал рендер при отсутствии `getSettings()` на API-клиенте (TypeError в `loadPresets`).
+
+### Решения
+
+- Введён `pages/export/useExportPageModel.ts` как единый stateful слой страницы:
+  - загрузка данных (`presets`, справочники, settings),
+  - производные состояния (selected sheets, mode options),
+  - бизнес-валидация и запуск `flexible`/`template` экспортов,
+  - toggles групп/фильтров и update-функции конфигов листов.
+- В `pages/export/components.tsx` выделен `TemplateExportCard`, чтобы убрать крупный inline-блок шаблонного экспорта из `ExportPage.tsx`.
+- `ExportPage.tsx` оставлена как тонкий view-composition слой с wiring extracted-компонентов и hook-модели.
+- `loadPresets` получил безопасную деградацию: если `apiClient.getSettings` недоступен (частичный mock/контракт), страница использует fallback `{}` вместо аварии.
+- Добавлен регрессионный тест на сценарий отсутствующего `getSettings`.
+
+### Consequences
+
+- Экспортный экран проще сопровождать локальными изменениями без роста page-монолита.
+- Падение страницы из-за частичного API-клиента устранено.
+- Тестовый контур стал устойчивее к неполным мокам и фиксирует этот edge-case явно.
+
+## 2026-04-07 — mobile operational cards should prefer calm hierarchy over bright status noise
+
+**Context**: В мобильных карточках `OrdersPage`, `DeliveryPage`, `CatalogsPage` и `UsersPage` стало слишком много ярких сигналов одновременно: цветные status/meta-блоки спорили за внимание, а часть операторских полей (`статус заказа`, `связка`) нельзя было гибко скрыть через sysadmin-настройки. Пользовательский фидбек прямо указал, что в мобильной работе «не очень сразу понятно что куда», а статусы `открыт/закрыт` и пёстрые карточки «бросаются в глаза» сильнее, чем нужно.
+
+### Решения
+
+- Для `DeliveryPage` добавлен отдельный sysadmin-toggle `delivery_show_order_status`, чтобы показывать статус заказа только там, где он реально нужен оператору.
+- Для `OrdersPage` добавлен отдельный sysadmin-toggle `orders_show_linked_code`, чтобы связка / код объединения не шумела в mobile-карточках, если сценарий этого не требует.
+- Mobile-card presentation в `CatalogsPage` и `UsersPage` переведена на более спокойную visual language: outline-чипы, мягкие tinted surfaces вместо плотных цветных заливок, приглушённые акцентные карточки.
+- В мобильных карточках заказов усилена иерархия: точка выдачи вынесена в отдельный meta-блок вместо смешивания с остальными полями.
+
+### Consequences
+
+- Sysadmin получил точнее управляемый mobile UX без необходимости прятать целые страницы или сценарии.
+- На телефоне ключевые данные считываются быстрее, потому что цвет теперь помогает, а не перекрикивает структуру.
+- UI стал ближе к operator-first модели: сначала ясность и рабочий фокус, потом декоративная сигнализация.
+
+## 2026-04-06 — strict template export keeps 1:1 layout but appends overflow item columns
+
+**Context**: Пользовательский reference-файл `samples/excel/template_headers_reference_2026-04-06.txt` показал, что живые шаблоны используют много сокращённых товарных заголовков (`БРУСНИКА В СОС СИР`, `КЕД ОР В КЕД СИР`, `ШИШКА МАРМ`, `ИКРА ДОЙ`, `СЕЛЬДЬ ОЛЮТ ...`). В режимах `export-template-strict` и `export-template-distribution` строки заказа, которые не находили точную или fuzzy-колонку, тихо пропадали из товарной части таблицы. Параллельно ширина всех товарных колонок была избыточной для листов 1:1, где в ячейках обычно лежат только короткие числа.
+
+### Решения
+
+- Вынесено общее разрешение товарной колонки в helper `_resolve_template_line_column()`.
+- Для strict/distribution режимов включён безопасный fallback: если позиция не сматчилась с существующими заголовками, справа добавляется overflow-колонка с названием позиции вместо молчаливой потери данных.
+- `_append_template_column()` теперь регистрирует новый заголовок через ту же normalization/match-схему, что и исходный шаблон, и копирует стили не только заголовка, но и уже подготовленных строк тела.
+- В `_apply_template_layout(strict=True)` ширина товарных колонок после первых четырёх снижена до компактного numeric-friendly формата.
+
+### Consequences
+
+- 1:1-экспорт перестал терять заказанные позиции даже при неполном или устаревшем шаблоне.
+- Добавленные на лету товарные колонки корректно участвуют в дальнейших match/fill и суммарной строке.
+- Лист distribution/strict заметно компактнее по горизонтали и лучше подходит для ручной раздачи/сверки.
+
+## 2026-04-07 — Security hardening, sysadmin-configurable UI, Excel export reliability
+
+**Context**: Комплексный аудит выявил уязвимости безопасности и архитектурные слабости: SQL-инъекция через f-string в debug endpoint, timing-атаки на сравнение секретов, утечка памяти в rate limiter, LIKE wildcard injection, header injection в Content-Disposition. Также «Инструменты» жили в общих настройках вместо sysadmin-режима, экспортные режимы и поля в разделе «Люди» были жёстко захардкожены без возможности конфигурации, а шаблонный Excel-экспорт молча пропускал позиции без fuzzy-совпадения.
+
+### Решения
+
+**Security:**
+- SQL injection fix: `debug.py test_catalog_match` переведён на параметризованные запросы (`:catalog_id`).
+- Timing attack fixes: `deps.py` — `hmac.compare_digest` для service key, device fingerprint и CSRF token (было `!=`).
+- Content-Disposition header injection: `orders.py _build_xlsx_response` — filename санитизируется, оборачивается в кавычки.
+- Rate limiter memory leak: `main.py RateLimitMiddleware` — добавлена периодическая чистка stale buckets (каждые 5 мин).
+- LIKE wildcard injection: `deliveries.py` — user input экранируется (`%`, `_`, `\`).
+- Filesystem path leak: `debug.py _run_catalog_reprocess_script` — ошибка больше не раскрывает внутренний путь клиенту.
+
+**UI Architecture:**
+- «Инструменты» перенесены из `SettingsPage` (tab 5) в `DebugPage` (tab 5) с гейтом `sysadmin-only`.
+- `AppRoutes.tsx`: `/templates` и `/excel-preview` теперь ведут на `/debug?tab=5`.
+
+**Sysadmin Configurability:**
+- `DebugPage SysadminControls` расширен 17 новыми полями: 4 export mode toggles (`export_mode_template`, `export_mode_strict`, `export_mode_distribution`, `export_mode_flexible`) + 7 people field toggles.
+- `ExportPage` загружает настройки и динамически показывает/скрывает режимы шаблонного экспорта и flexible builder.
+- `UsersPage` загружает настройки и скрывает кнопки (password reset, promote owner, delegate toggle, full details, regions) по конфигурации sysadmin.
+
+**Excel Export:**
+- `_fill_template_row`: при отсутствии fuzzy-совпадения вместо `continue` создаётся fallback-колонка из `catalog_item.title` / `item_title` / `title_raw` через `_append_template_column`.
+
+### Consequences
+
+- Закрыты 6 уязвимостей безопасности (1 HIGH, 3 MEDIUM, 2 LOW).
+- Sysadmin получил полный контроль над видимостью экспортных режимов и полей в разделе «Люди» через единый UI в Debug > Sysadmin.
+- Excel-экспорт больше не теряет позиции молча при отсутствии fuzzy-совпадения.
+- Шаблонный экспорт и flexible builder можно полностью отключить через настройки.
+
+## 2026-04-06 — Admin debug parser switched to production parser pipeline; parser analytics now respect chat scope
+
+**Context**: В админке `DebugPage` endpoint `/debug/test-parser` жил на упрощённой самописной логике (regex + substring/fuzzy-lite), тогда как реальный runtime-парсинг заказов шёл через `backend/app/domain/order_domain.py` и DB-aware rules активного каталога / pickup places. Из-за этого debug-инструмент мог показывать другой результат, чем production worker. Дополнительно `AnalyticsPage` уже фильтровала дашборд по чату, но `/analytics/parser-accuracy` оставался глобальным и не совпадал с выбранным chat scope.
+
+### Решения
+
+- `admin_service /debug/test-parser` переведён на production parsing stack:
+  - использует `backend.app.domain.order_domain.parse_order_text`, `looks_like_order`, `evaluate_order_lines`, `build_catalog_keywords`;
+  - подмешивает реальные `pickup_places` и `catalog_items` из БД вместо локальной упрощённой эвристики;
+  - умеет работать в scope выбранного каталога/чата, но сохраняет прежний response shape для `admin-web`.
+- В `DebugPage` добавлен выбор открытого каталога для parser-теста, чтобы оператор тестировал тот же каталог, что участвует в боевом match/evaluation.
+- `/analytics/parser-accuracy` расширен фильтрами `chat_id` и `catalog_id`; `AnalyticsPage` теперь передаёт выбранный `chat_id`, чтобы parser-метрики соответствовали текущему фильтру дашборда.
+- Добавлены API-регрессии на:
+  - production-backed parser test с alias pickup place + catalog scope;
+  - chat-scoped parser accuracy.
+
+### Consequences
+
+- Debug UI больше не показывает «альтернативную реальность» по парсингу: администратор видит почти тот же pipeline, что и production runtime.
+- Аналитика качества парсера стала пригодной для разборов по конкретному чату, а не только по всей базе целиком.
+- Любые дальнейшие улучшения parser-domain автоматически становятся видны и в debug-инструментах админки без дублирования логики.
+
+## 2026-04-06 — Worker decomposed into package modules; backend security middleware aligned; follow-up backlog fixed in docs
+
+**Context**: Исторический `backend/app/worker.py` вырос в orchestration-монолит, где в одном файле смешивались polling loop, update dispatch, spam gating, callback flow, order processing, catalog healing и messaging/runtime helpers. Это повышало стоимость любых правок в runtime и делало worker слишком хрупким для дальнейшего развития. Параллельно основной backend-контур в `backend/app/main.py` отставал от уже усиленного admin-side security baseline и нуждался хотя бы в минимальном защитном middleware-слое.
+
+### Решения
+
+- `app.worker` переведён из одного файла в package `backend/app/worker/` с разбиением по зонам ответственности:
+  - `loop.py` — polling loop, batch processing, update routing;
+  - `order_handler.py` — order processing, smart recognition fallback, supplement/reply logic;
+  - `command_router.py` — public/admin command routing;
+  - `catalog_heal.py` — startup/online catalog healing и reparse problem orders;
+  - `messaging.py`, `helpers.py`, `spam_handler.py` — transport/runtime helper слой.
+- Legacy-монолит сохранён как `backend/app/_worker_legacy.py` как reference/archive, а публичный import path `app.worker` теперь обслуживается через совместимый package facade.
+- В `backend/app/main.py` добавлен минимальный backend security middleware baseline:
+  - per-IP rate limiting;
+  - security headers middleware;
+  - suspicious request blocking;
+  - webhook payload size validation.
+- Следующие крупные кандидаты на декомпозицию зафиксированы явно, чтобы не потерять architectural follow-up после worker-refactor:
+  - `admin_service/app/api/routers/orders.py` (~3219 LOC);
+  - `backend/app/domain/order_domain.py` (~1990 LOC).
+- Следующие security follow-ups также зафиксированы как обязательный backlog следующей волны hardening:
+  - добавить явные Pydantic request validation schemas для webhook payloads;
+  - маскировать пароль/credentials в DB connection URL logging;
+  - заменить broad `except Exception` на более узкие exception types там, где это влияет на observability и security reviewability.
+
+### Consequences
+
+- Worker runtime стал модульнее и безопаснее для локальных изменений: loop, order handling, commands, spam и catalog-heal теперь можно развивать отдельно.
+- Backward compatibility для `app.worker` imports сохранена через re-export surface, что уменьшает риск поломки тестов и legacy call sites.
+- Backend security posture выровнен лучше прежнего, но validation / secret masking / exception hygiene остаются отдельной следующей фазой, а не считаются уже закрытыми.
+- Архитектурный backlog теперь закреплён в документации, а не живёт только в контексте текущей сессии.
+
 ## 2026-03-26 — Order parser policy: no chat-specific hacks, only reusable learning from admin data
 
 **Context**: Пользователь зафиксировал архитектурное требование для бота: парсинг заказов не должен чиниться точечными чат-специфичными костылями под отдельные сообщения. Источник истины для доступных товаров — активный каталог, собранный из admin-side сообщений в чате. Источник истины для точек выдачи — только точки, заведённые нами в `pickup_places`. Распознавание пользовательских заказов должно улучшаться через общие механизмы нормализации, fuzzy matching и alias derivation внутри этих справочников, а не через ручные if/else под конкретный кейс.
@@ -453,7 +1094,7 @@
 - Добавлен документ [[22-messenger-agnostic-integration-spec]] как каноничный provider-agnostic контракт.
 - Зафиксирован единый подход `adapter-per-provider` поверх общего domain pipeline.
 - В интеграционных документах (`docs/18`, `docs/19`, `docs/20`) закреплена модель capability-driven интеграции и общий playbook подключения нового провайдера.
-- Навигация [[README]] и `README.md` обновлена ссылкой на универсальный контракт.
+- Навигация [[Отличный улов/docs/README]] и `README.md` обновлена ссылкой на универсальный контракт.
 
 ### Consequences
 
@@ -474,7 +1115,7 @@
   - [[21-fluffychat-theming-and-ui-refactor-scope]]
 - Зафиксировано явно, что текущий бот имеет reusable domain core, но Telegram-specific transport layer не переносится напрямую на Matrix.
 - Зафиксировано явно, что внешний `/integrations/*` контур сейчас read-oriented и не является готовым публичным customer write API для нативных mobile-форм заказа.
-- Навигация по новым материалам добавлена в [[README]] и корневой `README.md`.
+- Навигация по новым материалам добавлена в [[Отличный улов/docs/README]] и корневой `README.md`.
 
 ### Consequences
 
@@ -1684,7 +2325,7 @@ Pickup-админы и модераторы могут устанавливат�
 ### Решения
 - Добавлен [[14-api-reference]] как единый исчерпывающий реестр API по сервисам `backend` и `admin_service`, включая ссылки на OpenAPI/Swagger и карту endpoint-ов.
 - В `backend` добавлен discovery endpoint `GET /capabilities` (`backend/app/main.py`) для машинно-читаемого перечисления публичных ручек и статуса доступности docs (`/docs`, `/openapi.json`).
-- Добавлен [[README]] как индекс документации.
+- Добавлен [[Отличный улов/docs/README]] как индекс документации.
 - Обновлены точки навигации в `README.md` и `admin_service/README.md` на новый API reference.
 
 ### Rationale
@@ -2583,3 +3224,28 @@ Bot needed to handle "dumb" orders better - incomplete data, typos, unclear item
 
 - Экран легче найти в боковом меню и проще воспринимать как отдельную страницу.
 - Старые ссылки не ломаются благодаря redirect с `/api-center`.
+
+## 2026-04-07 — runtime export matching hardened: repeated-line dedupe + header-aware qty normalization
+
+**Context**: В живых выгрузках distribution/strict шаблонов обнаружились три связанных дефекта: (1) внутри одного заказа повторялся полный блок строк (`A,B,A,B`), что удваивало и summary, и количества; (2) фасовочные позиции вроде `Чука` в колонке `... уп 1кг` писались как сырые граммы (`1000`) вместо количества упаковок; (3) при fuzzy-сопоставлении короткий товар `Кижуч` мог попадать в колонку `Икра кижуча ...`.
+
+### Решения
+
+- Добавлено схлопывание полностью повторённой последовательности строк заказа (`_collapse_repeated_line_sequence`) и применено в:
+  - `_fetch_order_lines_grouped(...)` (экспортные флоу),
+  - `get_order(...)` (деталка заказа в API/UI).
+- Добавлена header-aware нормализация количества для шаблонного экспорта:
+  - `_parse_template_header_qty_hint(...)`,
+  - `_normalize_qty_for_template_header(...)`,
+  - `_extract_line_qty_for_template(...)`.
+- Оба заполнителя шаблонов (`_fill_template_row`, `_fill_strict_template_row`) переведены на единый extractor, учитывающий фактический заголовок колонки и unit каталога.
+- В `_normalize_qty_for_catalog_item(...)` добавлена конверсия mass→package для `unit_hint in {шт, уп, банка}` при наличии `pack_hint` (например, `1000 г` -> `1 уп` при `pack_hint=1 кг`).
+- Усилен template matching:
+  - `_find_matching_template_column(...)` учитывает числовые токены заголовков как guard,
+  - `_template_similarity_score(...)` дополнительно штрафует конфликтные/ложные substring-совпадения и повышает вес содержательного core-overlap.
+
+### Consequences
+
+- Дубли строк `A,B,A,B` больше не раздувают выдачу и экспорт.
+- Фасовочные колонки (`уп/шт/банка`) получают количество упаковок вместо сырых граммов при корректном `pack_hint`.
+- Снижен риск ложных попаданий в «родственные», но неверные товарные колонки (fish vs caviar).

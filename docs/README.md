@@ -51,6 +51,14 @@
 | `24-admin-auth-and-integration-security-runbook.md` | runbook | current | Актуальная схема аутентификации `admin_service`, one-time login и M2M security. |
 | `24-integration-docs-map.md` | overview | current | Карта интеграционного комплекта документов и рекомендуемый порядок чтения. |
 | `25-project-handbook.md` | overview | current | Сквозной handbook по системе: домен, сервисы, потоки данных, роли и границы ответственности. |
+| `_index.md` | moc | current | **Map of Content (Obsidian).** Точка входа в базу знаний; навигация по всем доменам проекта. |
+| `26-export-contract.md` | spec | current | Строгий контракт Excel-экспорта (template / strict / distribution): фиксированные колонки, привязка к датам каталога, безопасность. |
+| `26-catalog-source-of-truth.md` | spec | current | Каталог как единственный источник истины: какие правки и доучивания запрещены. |
+| `27-security-runbook.md` | runbook | current | Сборный security-чеклист: auth, CSRF, экспорт, sysadmin-тогглы, рейт-лимит. |
+| `28-stability-playbook.md` | runbook | current | Чек-лист стабильности orders/parser/catalog/export — обязателен перед закрытием задачи. |
+| `29-ai-knowledge-base.md` | guide | current | Как Claude / Copilot / Codex должны пользоваться этой папкой и Obsidian-vault. |
+| `30-user-flows.md` | guide | current | Пользовательские потоки по ролям: customer, pickup admin, regional admin, owner, sysadmin. |
+| `31-rate-limit-buckets.md` | reference | current | Карта рейт-лимит-бакетов middleware admin_service. |
 | `PRODUCTION_ROADMAP.md` | roadmap | target | План перевода системы в production-ready состояние; отражает целевую, а не фактическую реализацию. |
 | `PRODUCTION_UPGRADE_v2.0.md` | archive | historical | Исторический checklist апгрейда `v2.0`; не является текущим source of truth. |
 | `ROADMAP_IDEAL_STATE.md` | roadmap | target | Перечень оставшихся задач до целевого состояния системы. |
@@ -76,6 +84,7 @@
 | Файл | Тип | Статус | Описание |
 |---|---|---|---|
 | `changelog/decisions-log.md` | changelog | current | Журнал зафиксированных продуктовых и архитектурных решений по мере развития проекта. |
+| `changelog/codex-project-memory.md` | changelog | current | Короткая живая память для Codex: текущие инварианты, последние live-проблемы и ожидания пользователя по parser/catalog/export. |
 | `changelog/implementation-status.md` | changelog | current | Снимок текущего фактического состояния проекта и реализованных частей системы. |
 | `changelog/known-issues.md` | changelog | current | Список известных проблем и уже закрытых дефектов. |
 | `changelog/refactoring-jan2026.md` | changelog | historical | Исторический журнал январского рефакторинга и сделанных структурных изменений. |

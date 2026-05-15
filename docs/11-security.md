@@ -117,9 +117,13 @@ db.execute(f"SELECT * FROM orders WHERE id = {order_id}")
 - **Security headers**: CSP (no inline scripts), COOP, COEP, CORP, HSTS, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, Cache-Control: no-store
 - **Suspicious request blocking**: Middleware regex блокирует path traversal, XSS, SQL injection, code injection, prototype pollution, доступ к sensitive файлам (.env, .git)
 - **Brute-force protection**: Account lockout после 5 неудачных попыток за 15 мин (блок 30 мин); IP блокировка после 20 попыток за 60 мин
-- **Constant-time comparisons**: `hmac.compare_digest()` для всех secret/token сравнений
+- **Constant-time comparisons**: `hmac.compare_digest()` для всех secret/token сравнений (service key, device fingerprint, CSRF, bootstrap, one-time key)
 - **Disabled docs endpoints**: Swagger UI, ReDoc и OpenAPI schema отключены в production
 - **Oversized header protection**: Запросы с заголовками > 8192 байт блокируются
+- **Rate limiter memory management**: Периодическая чистка stale buckets каждые 5 мин для предотвращения роста памяти
+- **Content-Disposition sanitization**: Имена файлов в ответах экранируются от control chars и injection
+- **LIKE wildcard escaping**: Пользовательский ввод в LIKE-запросах экранирует `%`, `_`
+- **Parameterized SQL**: Все SQL-запросы используют параметры bind (`:param`), даже в debug endpoints
 
 ### Frontend security (реализовано)
 - **Anti-DevTools**: Блокировка F12, Ctrl+Shift+I/J/C, Ctrl+U/S/P, right-click; debugger timing detection; console override

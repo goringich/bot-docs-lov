@@ -6,6 +6,8 @@
 
 - Для рутинных изменений тесты опциональны.
 - Для рискованных изменений (БД, миграции, парсинг, экспорт, роутинг апдейтов) — запускать целевые тесты.
+- Любые изменения, затрагивающие `login/auth/cookie/CSRF/middleware` или mutating API контракты, считаются рискованными по умолчанию.
+- Для таких изменений перед завершением обязательно запускать `make check-post-preflight`.
 
 ## Где лежат тесты
 
@@ -43,6 +45,7 @@
 	- `make check-lint-python`
 	- `make check-lint-frontend`
 	- `make check-fast`
+	- `make check-post-preflight`
 	- `make check`
 	- `make check-docker`
 	- `bash scripts/run_checks.sh help`

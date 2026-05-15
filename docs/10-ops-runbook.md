@@ -47,6 +47,10 @@ Worker обрабатывает очередь `tg_updates`.
 3) если есть миграции — выполнить `alembic upgrade heads`
 4) перезапустить API + worker
 
+После рестарта worker выполняет startup reparse не только для `needs_admin/partial/rejected`, но и для сохранённых `active` заказов. Это нужно, чтобы фиксы парсера, ручные правки каталога и alias-обновления реально переписывали старые `order_lines` и отражались в экспорте.
+
+Важно: worker **не** дописывает каталог из runtime/admin-feed сообщений. Каталог обновляется отдельно (через админские операции или ручной синк), а parser/worker только читает текущий каталог как источник истины.
+
 **Последняя миграция:** `b2c3d4e5f6a7` — bot_visible 3-mode (hidden/reactions_only/full), regional_admin role seed, high-load indexes, admin_user_regions table.
 
 Подробные команды (копипаст) есть в [[11-restart]].
@@ -92,6 +96,8 @@ docker compose down
 Рекомендуемая минимальная проверка:
 1) `curl http://127.0.0.1:8000/health`
 2) отправить тестовое сообщение в чат и убедиться, что worker не падает
+
+Если нужно вручную массово перепарсить уже сохранённые заказы после ручного обновления каталога, alias-правок или parser-fix, используйте `backend/scripts/sync_catalog_from_tg_updates.py` с флагом `--reprocess-all` для нужного чата.
 
 ## Миграции
 

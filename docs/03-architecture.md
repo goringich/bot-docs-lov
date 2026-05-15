@@ -35,6 +35,18 @@
   - обновляет агрегированное состояние заказа
   - отправляет ответ через AdapterManager (автоматический routing по провайдеру)
 
+**Текущая внутренняя структура worker runtime (`backend/app/worker/`):**
+- `__init__.py` — facade/re-export layer для совместимости `app.worker` imports и тестового private surface;
+- `loop.py` — polling loop, batch processing, update dispatch, callback handling;
+- `order_handler.py` — order recognition, smart fallback, supplement flow, order status transitions;
+- `command_router.py` — public/admin command routing и command-side order mutations;
+- `catalog_heal.py` — startup/online catalog sync, auto-enrichment и reparse problem orders;
+- `messaging.py` — provider-aware send/reaction/document helpers;
+- `spam_handler.py` — spam gating / moderation integration;
+- `helpers.py` — shared runtime helpers и small orchestration utilities.
+
+`backend/app/_worker_legacy.py` сохранён как reference-архив старого монолита, но production import path теперь должен восприниматься именно как package-based worker runtime.
+
 **Adapter layer (`adapters/`):**
 - `AdapterManager` — единая точка dispatch для всех egress-действий
 - `BridgeTransport` — HTTP-транспорт для non-Telegram провайдеров
@@ -178,5 +190,16 @@ Admin-web включает страницу Debug:
 - `datetime.utcnow()` → `datetime.now(UTC).replace(tzinfo=None)` (Python 3.12+)
 - `asyncio.get_event_loop()` → прямой вызов regex (sync) или `asyncio.run()` (async)
 - `@app.on_event("startup")` → `asynccontextmanager` lifespan
+
+## Следующие архитектурные и security-кандидаты
+
+### Крупные монолиты на следующую волну декомпозиции
+- `admin_service/app/api/routers/orders.py` (~3219 LOC) — owner/export/template/order-mutation логика пока слишком плотно смешана в одном router-файле.
+- `backend/app/domain/order_domain.py` (~1990 LOC) — parsing heuristics, metadata extraction, order scoring и catalog-keyword logic уже требуют более явного внутреннего split.
+
+### Следующие security-hardening шаги
+- Ввести явные Pydantic request validation schemas для webhook payloads и других внешних ingress path'ов вместо best-effort dict parsing.
+- Маскировать DB password / credentials в connection URL logging и похожем diagnostic output.
+- Постепенно заменять broad `except Exception` на конкретные exception types там, где это влияет на observability, retry semantics и security reviewability.
 
 ### [[04-data-model]]

@@ -6,6 +6,12 @@
 
 ## Resolved
 
+- ~~(2026-04-07) **Шаблонный Excel-экспорт пропускал позиции без fuzzy-совпадения**: `_fill_template_row` делал `continue` при `column_idx = None`, молча теряя позиции заказа~~ → **Закрыто:** добавлен fallback через `_append_template_column` — создаётся новая колонка из названия товара.
+- ~~(2026-04-07) **Content-Disposition header injection в `_build_xlsx_response`**: filename не санитизировался~~ → **Закрыто:** кавычки + `re.sub` для control chars.
+- ~~(2026-04-07) **SQL injection в `debug.py test_catalog_match`**: f-string с `catalog_id`~~ → **Закрыто:** параметризованный bind `:catalog_id`.
+- ~~(2026-04-07) **Timing attacks в `deps.py`**: `!=` для service key, fingerprint, CSRF~~ → **Закрыто:** `hmac.compare_digest` для всех трёх.
+- ~~(2026-04-07) **Rate limiter memory leak**: `_hits` dict рос бесконечно~~ → **Закрыто:** периодическая чистка stale buckets.
+- ~~(2026-04-07) **LIKE wildcard injection в deliveries.py**: `%` и `_` не экранировались в search~~ → **Закрыто:** `search.replace()` для спецсимволов.
 - ~~(2026-06-18) Dark-mode: белый текст на белом фоне в OrdersPage (raw text), ExcelPreviewPage (header), TemplatesPage (column cards), DashboardPage (QuickStat) — hardcoded hex-цвета~~ → **Закрыто:** все заменены на theme-aware palette tokens (`text.primary`, `grey.900`/`grey.50` по mode, `primary.main`/`primary.contrastText`, `info`/`success`/`warning`).
 - ~~(2026-06-18) CatalogsPage: layout overflow при resize — `calc(100vw - 320px)` не учитывал динамическую ширину drawer~~ → **Закрыто:** заменено на `maxWidth: "100%"`.
 - ~~(2026-06-18) MainLayout: active menu item с `primary.light` — низкий контраст с белым текстом~~ → **Закрыто:** заменено на `primary.main` / hover `primary.dark`.
@@ -30,6 +36,13 @@
 
 ## Open Issues
 
+- (2026-04-30) **Балашиха (`catalog_id=9`) даёт полупустой live distribution export из-за неполного catalog source-of-truth**: live XLSX строится корректно и сохраняет `raw_text`, но только `44` заказа из `91` получают хотя бы одну товарную ячейку; по `290 order_lines` только `72 ok`, `218 unknown_item`. Частые пробелы покрытия: `Риет с крабом`, `Ряпушка`, `Филе Хека`, `Омуль`, `Филе минтая`, `Форель*`, `Печень и икра минтая`, `Дорадо`, `Чука`, `Синие мидии`. Следующий шаг — расширять catalog text / aliases и перепарсивать заказы, а не чинить XLSX-слой.
+
+- (2026-04-07) **IP spoofing bypasses rate limiting**: `X-Forwarded-For` можно подменить без reverse proxy. Нужно доверять только `request.client.host` или настроить `TRUST_PROXY` mode.
+- (2026-04-07) **Rate limiter per-process only**: при нескольких Uvicorn workers лимиты умножаются. Для production рекомендуется Redis-backed rate limiting.
+- (2026-04-07) **CORS origin regex from env**: `ADMIN_API_CORS_ORIGIN_REGEX` может быть слишком широким. Нужна валидация при старте.
+- (2026-04-07) **Template upload loads full file into memory**: `await file.read()` без streaming. Content-Length pre-check рекомендуется.
+- (2026-04-07) **`orders.py` monolith (~3200+ LOC)**: экспортные функции должны быть выделены в отдельный `orders_export.py`.
 - (2026-03-24) **Endpoint `/feedback` not implemented**: MainLayout отправляет POST `/feedback` при сабмите формы «Сообщить об ошибке», но backend endpoint пока не реализован. Frontend graceful-degrade: ошибка молча игнорируется. Следующий шаг — создать endpoint и forward в Telegram DM администратору.
 - (2026-03-24) **Sysadmin role must be manually assigned**: Роль `sysadmin` пока создаётся вручную в БД (`INSERT INTO admin_roles`), автоматического provisioning через UI нет.
 - (2026-03-18) Универсальный provider-agnostic ingress и bridge-based non-Telegram egress уже реализованы (`POST /integrations/{provider}/webhook` + outbound dispatch через `*_OUTBOUND_URL`), но production-ready vendor-native connectors по-прежнему остаются только для Telegram. Для Matrix/VK/MAX требуется довести transport client, точные provider-specific signature semantics и интеграционные тесты capability profile до production уровня.
@@ -89,4 +102,3 @@ WHERE status IN ('new', 'processing');
 2. Скопируйте authtoken из dashboard
 3. Добавьте в `.env`: `NGROK_AUTHTOKEN=your_token_here`
 4. Перезапустите: `make compose-restart`
-
