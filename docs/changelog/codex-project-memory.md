@@ -57,6 +57,22 @@
 - Не тратить время на Excel/UI-слой, пока не подтверждено, что нужные товары вообще присутствуют в каталоге или покрыты alias-ами.
 - Следующий repair-flow для такого кейса: расширить source catalog или aliases, перепарсить заказы, затем повторить live export и сравнить новую долю заполненных строк.
 
+## MAX-заказы: ingress перед парсером
+
+Проверка 2026-06-22 показала: в live DB было только `5` MAX `tg_updates` (`3` bot_added, `2` message_created) и только `1` заказ `source_provider=max`. Поэтому жалобу вида «не появились заказы из MAX» сначала проверять как ingress/webhook/backfill проблему, а не как catalog coverage.
+
+Текущие MAX-инварианты:
+- `MAX GET /messages?chat_id=...` с текущим bot token может вернуть пустую историю даже для известного чата; без payload в `tg_updates` нечего перепарсить.
+- На 2026-06-22 dry-run backfill для известных `chat_id=-72153821712958` и `chat_id=888777` вернул `fetched=0`; live DB по-прежнему имела только `1` MAX-заказ, значит «все заказы из MAX» не восстановить без правильного chat_id, доступа бота к истории или внешнего экспорта сообщений.
+- На 2026-06-23 `GET /chats` вернул один реальный групповой чат `-72153821712958` («Отличный Улов Балашиха, Железнодорожный»), но `GET /chats/{chatId}/members/me` показал `is_admin=false`, без `read_all_messages`. Поэтому повторное добавление бота и пользовательский переключатель «доступ к истории» сами по себе не дали API-доступ: `GET /messages` по-прежнему вернул `0`.
+- Перед backfill проверять фактические права командой `backend/scripts/import_max_messages.py --list-chats`. Для старой истории бот должен отображаться администратором с правом `read_all_messages`.
+- Для полного backfill всех доступных групповых чатов использовать `backend/scripts/import_max_messages.py --all-chats --list-chats --dry-run`, затем без `--dry-run`. Скрипт обходит `GET /chats` и историю каждого чата постранично, кладёт сообщения в `tg_updates`, дальше их обрабатывает обычный worker.
+- Для точечного backfill остаётся `backend/scripts/import_max_messages.py --chat-id <id> --count 100`; `--chat-id` можно повторять.
+- MAX parser нормализует literal `\n` в настоящие переносы до order parser.
+- MAX `update_id` должен строиться из распарсенного `message.body.mid` / `event_id`, а не из времени приёма.
+- Если worker падает на `Duplicate entry ... user_profiles.tg_user_id`, заказ из update откатывается; user profile upsert должен быть атомарным.
+- Если order-like сообщение пришло, когда в чате нет `open` catalog/сбора, worker должен оставить diagnostic snapshot `telegram_order_without_catalog` / `max_order_without_catalog`; sysadmin observability поднимает это как warning-alert, чтобы было видно, что сбор фактически начался в чате раньше каталога.
+
 ## Предпочтительный порядок действий для Codex
 
 1. Найти конкретный чат/каталог, по которому есть жалоба.

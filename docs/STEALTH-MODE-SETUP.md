@@ -20,7 +20,7 @@
 
 1. Откройте [@BotFather](https://t.me/BotFather) в Telegram
 2. `/newbot` → введите имя (например, «Отличный Улов») и username (например, `otlichniy_ulov_bot`)
-3. Скопируйте **TELEGRAM_BOT_TOKEN** (формат: `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`)
+3. Скопируйте **TELEGRAM_BOT_TOKEN** (формат: `[REDACTED_SECRET_731fa294d036]`)
 4. `/setprivacy` → выберите вашего бота → **Disable** (чтобы бот видел ВСЕ сообщения в группе, а не только команды)
 
 Важно: без отключения Privacy Mode бот не увидит обычные сообщения в группе.
@@ -42,19 +42,19 @@
 
 ```env
 # Telegram Bot
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+TELEGRAM_BOT_TOKEN=[REDACTED_SECRET_731fa294d036]
 ADMIN_USER_IDS=123456789,987654321    # Telegram user_id администраторов
-TELEGRAM_WEBHOOK_SECRET=your_random_secret
+TELEGRAM_WEBHOOK_SECRET=[REDACTED_SECRET_a7aff5087d10]
 
 # Database
 DB_HOST=mysql
 DB_PORT=3306
 DB_USER=root
-DB_PASSWORD=your_password
+DB_PASSWORD=[REDACTED_SECRET_4da337632304]
 DB_NAME=tg_orders
 
 # Admin API
-ADMIN_API_KEY=your_secret_api_key
+ADMIN_API_KEY=[REDACTED_SECRET_0ac00635f785]
 ```
 
 ---

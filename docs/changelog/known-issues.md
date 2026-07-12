@@ -36,6 +36,10 @@
 
 ## Open Issues
 
+- (2026-06-21) **Если backend миграции не применены до head, intake может silently деградировать:** worker падает на insert в `orders` с `Unknown column 'parent_order_id'` (или соседние reorder/archive поля), а `tg_updates` застревают в `new/retry` до ручного фикса схемы. **Runbook:** выполнить `alembic -c /app/backend/alembic.ini upgrade head` и перезапустить `api/worker`.
+
+- (2026-06-21) **MAX: заказы не появляются, если во входящем потоке только service events** (`bot_added`, `bot_started`) или тестовые сообщения без order-intent (`test order check`). В таком случае `tg_updates` содержит события MAX, но pipeline корректно не создаёт записи в `orders`, потому что нет валидного `message_created` с текстом заказа. Проверка: `tg_updates` по provider=`max` и `orders` по `source_provider='max'`.
+
 - (2026-04-30) **Балашиха (`catalog_id=9`) даёт полупустой live distribution export из-за неполного catalog source-of-truth**: live XLSX строится корректно и сохраняет `raw_text`, но только `44` заказа из `91` получают хотя бы одну товарную ячейку; по `290 order_lines` только `72 ok`, `218 unknown_item`. Частые пробелы покрытия: `Риет с крабом`, `Ряпушка`, `Филе Хека`, `Омуль`, `Филе минтая`, `Форель*`, `Печень и икра минтая`, `Дорадо`, `Чука`, `Синие мидии`. Следующий шаг — расширять catalog text / aliases и перепарсивать заказы, а не чинить XLSX-слой.
 
 - (2026-04-07) **IP spoofing bypasses rate limiting**: `X-Forwarded-For` можно подменить без reverse proxy. Нужно доверять только `request.client.host` или настроить `TRUST_PROXY` mode.

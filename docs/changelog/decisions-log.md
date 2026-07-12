@@ -1,5 +1,236 @@
 # Decisions log
 
+## 2026-06-22 — orders list filters source provider with TG/MAX buttons
+
+**Context**: Оператору нужен быстрый operational способ смотреть ленту заказов по источнику соцсети (`telegram` vs `max`) прямо в `OrdersPage`, без owner-only scope-фильтров.
+
+### Решение
+
+- В backend `orders` router расширен фильтром `source_provider=telegram|max`.
+- В `admin-web` добавлены отдельные кнопки-фильтры `Все / TG / MAX`.
+- Каталог остался отдельным фильтром выбора `catalog_id`, не частью сортировки.
+- Видимость кнопок источника управляется sysadmin-настройкой `orders_filter_show_source_provider`.
+
+**Consequences**:
+- Любая роль с доступом к разделу `Заказы` может быстро отфильтровать список по источнику (`TG`/`MAX`) без owner-only scope-режима.
+- Диагностика «почему не вижу MAX-заказы» стала проще: сначала сортировка/фильтр в UI, затем проверка фактического intake по `source_provider`.
+
+## 2026-06-21 — deferred reorder columns are not enough for inserts; migrations must be applied before live intake
+
+**Context**: Runtime verification с реальным MAX `message_created` показала, что `deferred`-поля в ORM защищают только read-path (`SELECT`), но не insert-path: при создании заказа worker всё равно пишет `orders.parent_order_id` / `orders.is_reorder`. На инстансе без миграции это даёт `OperationalError: Unknown column 'parent_order_id'` и блокирует создание заказов.
+
+### Решение
+
+- Зафиксирован operational-invariant: перед live intake обязателен `alembic upgrade head` для `backend`.
+- На текущем инстансе применена миграция reorder-полей (`l8m9n0o1p2q3`) до `head`, после чего MAX update обработан в `done`, заказ создан.
+
+**Consequences**:
+- Legacy-совместимость через `deferred` остаётся полезной для чтения, но не заменяет миграции схемы.
+- Runbook для инсталляций должен трактовать `alembic upgrade head` как обязательный шаг перед запуском ingestion worker.
+
+## 2026-06-21 — new chats default to hidden bot visibility
+
+**Context**: Требование оператора — в любых новых чатах бот должен быть полностью скрыт по умолчанию при первом появлении чата в системе (Telegram/MAX/admin bootstrap).
+
+### Решение
+
+- Дефолт `Chat.bot_visible` в модели установлен в `hidden`.
+- При создании чата в runtime путях значение задаётся явно:
+  - `backend/app/repo/order_repo.py::ensure_chat`
+  - `backend/app/admin_commands.py::_ensure_chat`
+  - `backend/app/handlers/admin_commands.py::_handle_catalog_open`
+  - `admin_service/app/api/routers/catalogs.py::_ensure_chat` (через column-existence guard для legacy-схем)
+- Fallback-нормализация в worker (`normalize_bot_visible_mode`, `get_chat_bot_visible`) также возвращает `hidden` для невалидных/пустых значений.
+
+**Consequences**:
+- Новые чаты не получают “full” режим случайно из fallback/legacy defaults.
+- Для старых чатов поведение управляется существующим значением в БД (без принудительной массовой миграции).
+
+## 2026-06-21 — global JSON exception handling for REST stability
+
+**Context**: Нужно повысить устойчивость REST API, чтобы неожиданные исключения не приводили к “ломающим” HTML/traceback ответам и были трассируемы по request id.
+
+### Решение
+
+- В `backend/app/main.py` и `admin_service/app/main.py` добавлены:
+  - `RequestIdMiddleware` (генерация/проброс `X-Request-ID`)
+  - handler `RequestValidationError` → структурированный JSON (`detail`, `errors`, `request_id`)
+  - handler `Exception` → стабилизированный JSON 500 (`detail`, `request_id`) + `logger.exception`.
+
+**Consequences**:
+- Клиенты получают предсказуемый JSON-контракт для 422/500.
+- Любой сбой коррелируется по `X-Request-ID` в логах без раскрытия внутренних деталей наружу.
+
+## 2026-06-17 — legacy-schema compatibility: defer reorder columns in `Order`
+
+**Context**: На инстансе без миграции reorder-полей (`orders.parent_order_id`, `orders.is_reorder`) startup catalog heal падал на `SELECT Order` с ошибкой `Unknown column ... in field list`.
+
+### Решение
+
+- В `backend/app/models.py` поля `Order.parent_order_id` и `Order.is_reorder` переведены в `deferred(mapped_column(...))`.
+- Это выравнивает поведение с уже deferred архивными полями и позволяет `select(Order)` работать на legacy-схемах, где эти колонки ещё отсутствуют.
+
+**Consequences**:
+- Worker startup heal больше не падает на старой схеме `orders`.
+- Reorder-поля подгружаются только при явном доступе; на legacy-БД такой доступ нужно избегать до применения миграций.
+
+## 2026-06-17 — provider-aware replay from `tg_updates` is required for MAX catalog recovery
+
+**Context**: Когда MAX-сообщения прилетают до открытия каталога или когда нужно догнать уже сохранённые webhook events, sysadmin использует replay из `tg_updates`. До этого `backend/scripts/collect_orders_from_tg_updates.py` умел читать только Telegram-shaped payload (`message` / `channel_post`) и пропускал provider envelopes (`__integration_envelope__`) для MAX.
+
+### Решение
+
+- `backend/scripts/collect_orders_from_tg_updates.py` теперь разворачивает provider envelope через `envelope_to_worker_payload(...)` перед фильтрацией и парсингом.
+- При создании заказа replay теперь сохраняет `source_provider`, `source_chat_key` и `source_user_key`, чтобы MAX replay был консистентен с обычным worker path.
+- Добавлен regression test `backend/tests/test_sync_catalog_from_tg_updates.py::test_collect_orders_from_tg_updates_supports_max_provider_envelope`.
+
+**Consequences**:
+- MAX/VK/Matrix/Webhook replay из `tg_updates` проходит тем же нормализованным путём, что и live worker processing.
+- Для каталога MAX можно догонять старые provider messages без ручной конверсии payload в Telegram shape.
+
+## 2026-06-16 — chats are synced on any inbound provider message (including empty/service events)
+
+**Context**: В multi-messenger режиме (MAX/TG) часть чатов не появлялась в UI до первого «текстового заказа». Если бот уже добавлен в чат, но прилетали только service/empty события (например onboarding), запись в `chats` могла не появиться вовремя.
+
+### Решение
+
+- В `backend/app/worker/loop.py` добавлен ранний вызов `ensure_chat(...)` внутри ветки обработки входящего `message` (после извлечения `chat_id/chat_type/title/provider`), до фильтрации по `text`.
+- Для non-Telegram провайдеров используется `__provider` + `__provider_raw.chat_id`, чтобы корректно заполнять `messenger_provider/provider_chat_id/provider_chat_key`.
+- Добавлен regression test `backend/tests/test_worker_chat_sync.py::test_handle_update_syncs_chat_even_for_empty_text`.
+
+**Consequences**:
+- Чат теперь появляется в `/chats` и в `CatalogsPage`/UI сразу после любого валидного входящего сообщения от провайдера, а не только после первой непустой текстовой строки.
+- Поток обработки заказов не изменён; это только ранняя синхронизация метаданных чата.
+
+## 2026-06-16 — MAX (Max.ru) direct Bot API integration
+
+**Context**: Добавлен токен `MAX_BOT_TOKEN` для бота в мессенджере MAX (ex-TamTam, Mail.ru). Ранее MAX-адаптер работал только через внешний bridge-сервер (`MAX_OUTBOUND_URL`), который никогда не был запущен. Пользователь хочет собирать заказы из MAX чатов, где добавлен бот, так же как из Telegram.
+
+### Решение
+
+- Создан `backend/app/max_client.py` — прямой клиент MAX Bot API (`platform-api.max.ru`), аналог `telegram_client.py`. Auth через `Authorization: <token>` header (query-param больше не поддерживается с 2026).
+- `AdapterManager` обновлён: `send_message` и `send_document` для провайдера `max` теперь идут через `max_client` напрямую, минуя bridge transport. Только Matrix/VK/Webhook по-прежнему используют bridge.
+- `main.py` lifespan регистрирует MAX webhook через `POST /subscriptions` при старте (так же как для Telegram через ngrok). Webhook URL: `{ngrok}/integrations/max/webhook`.
+- `provider_bridge.py`: исправлено имя заголовка для верификации входящих MAX webhooks: `X-Max-Bot-Api-Secret` (официальный заголовок MAX API) вместо `X-Max-Webhook-Secret`.
+- `.env.example`: обновлены комментарии к `MAX_BOT_TOKEN` и `MAX_WEBHOOK_SECRET`.
+
+**Invariants**:
+- Весь порядок обработки сообщений (parse → update → TgUpdate → worker → parser → order_handler) не изменился — MAX события проходят через тот же путь через `/integrations/max/webhook` → `build_ingest_envelope` → `parse_max_event` → worker.
+- `MAX_OUTBOUND_URL` / `MAX_OUTBOUND_SECRET` (bridge) по-прежнему читаются из конфига, но при наличии `MAX_BOT_TOKEN` bridge не используется для исходящих сообщений.
+
+**Требования MAX API**:
+- Вебхук должен быть на HTTPS порту 443 с валидным TLS-сертификатом (ngrok обеспечивает это автоматически).
+- Токен — в `Authorization: <token>` header.
+
+## 2026-06-03 — empty catalogs stay empty, and bulk clear is explicit + sysadmin-gated
+
+**Context**: Оператор создавал «пустой» каталог для нового чата/сбора, но UI + backend молча подхватывали позиции из предыдущего каталога. В результате source-of-truth для нового каталога подменялся историческим ассортиментом ещё до явного импорта текста. Отдельно не хватало быстрого способа очистить ошибочно наполненный каталог целиком.
+
+**Root cause**:
+- `CatalogsPage` при смене чата сбрасывал форму создания на последний подходящий `source_catalog_id`, а не на truly-empty состояние.
+- `POST /catalogs` допускал copy-flow без явного `source_catalog_id` и fallback-ом выбирал последний каталог чата.
+- Для bulk-reset каталога не было отдельного безопасного endpoint-а.
+
+### Решение
+
+- `CatalogsPage` теперь сбрасывает создание на `source_catalog_id=0` и `copy_items_from_source=false`.
+- `POST /catalogs` копирует позиции только при явно заданном источнике; без него новый каталог остаётся пустым.
+- Добавлен `DELETE /catalogs/{catalog_id}/items`: перед удалением сервис снимает связи `order_lines.catalog_item_id`, чтобы история заказа и `raw_text` оставались нетронутыми.
+- В sysadmin-настройки добавлен toggle `feature_catalog_delete_all_items` для показа/скрытия массовой кнопки очистки.
+
+**Consequences**:
+- Пустой каталог теперь действительно пустой по умолчанию.
+- Copy/clone стали явными операциями, а не скрытым side-effect при создании.
+- Owner может быстро очистить каталог, а sysadmin может скрыть опасное массовое действие в UI.
+
+## 2026-06-03 — pivot export shares distribution semantics; missing qty is no longer invented
+
+**Context**: Операторы сравнивали `export-template-distribution` и `export-pivot` («Книга 1») для одного и того же каталога и видели расхождение по количествам. Параллельно parser скрывал часть проблемных строк, когда matched-позиция без явного qty автоматически превращалась в `1 шт/1 уп/1 банка`.
+
+**Root cause**:
+- `export_orders_pivot_xlsx` использовал отдельный raw qty parse-path вместо общего catalog-aware расчёта количества.
+- `_infer_missing_qty_for_catalog()` в `backend/app/domain/order_domain.py` синтезировала qty по `unit_hint`, даже когда пользователь его не писал.
+
+### Решение
+
+- Pivot export переведён на shared catalog-aware path (`_resolve_catalog_item_for_line` + `_extract_line_qty_for_template`), тот же по смыслу, что и distribution/template.
+- Дата каталога в шапке pivot normalizes to naive datetime перед записью в workbook, чтобы Excel/openpyxl не падал на timezone-aware значениях.
+- Parser больше не придумывает qty для matched-строки без явного количества: такие кейсы остаются `bad_qty` и не попадают в числовые totals.
+
+**Consequences**:
+- `export-pivot` Book 1 и `export-template-distribution` синхронизированы по семантике количества.
+- Missing qty теперь виден оператору как реальная проблема, а не маскируется под псевдо-валидный `1 шт`.
+
+## 2026-05-22 — export-template-strict: pre-создание колонок для всех позиций каталога
+
+**Context**: Операторы замечали, что `export-template-strict` и `export-template-distribution` дают разные результаты для одного каталога. В distribution всегда есть колонка для каждой позиции (прямой маппинг `catalog_item_id → column`). В strict позиции, которые не смогли fuzzy-матчиться к шаблонному заголовку, появлялись только через overflow при обработке строк — что порождало два edge-case:
+1. Если у разных заказов одна и та же позиция была сохранена с разными `item_title`, могло создать несколько дублирующих overflow-колонок.
+2. Позиции, не матчащиеся к шаблону, получали колонку с `item_title` из первой встреченной строки, а не из `catalog_items.title`, что нарушало инвариант «заголовок = catalog title».
+
+**Root cause**: `_build_catalog_item_template_column_map` при `strict=True` пропускал (`continue`) позиции без шаблонного матча, не добавляя их в `catalog_item_column_map`. Заполнение шло через `append_overflow_column=True` уже при обработке строк — поздно, с возможными коллизиями кэша.
+
+### Решение
+
+В `_build_catalog_item_template_column_map` добавлен параметр `append_missing: bool = False`. Когда True, позиция без матча получает новую колонку сразу (через `_append_template_column`) с точным `catalog_items.title`, в порядке `position_order → id`. В `export_orders_template_strict_xlsx` вызов использует `append_missing=True`.
+
+**Следствие**:
+- Все позиции каталога гарантированно имеют колонку в strict экспорте (как и в distribution).
+- Строки с одной и той же позицией (даже с разными item_title) всегда попадают в одну колонку — lookup идёт по `catalog_item_id`, а не по тексту.
+- Заголовки новых колонок = `catalog_items.title` (точно), а не `item_title` из конкретного заказа.
+- `template-distribution` не затронут (default `append_missing=False`).
+
+**Pickup-place уточнение**: значение берётся напрямую из `orders.pickup_place` без вывода или dodумывания — это инвариант для всех трёх strict-ориентированных режимов.
+
+
+
+**Context**: После добавления sysadmin-переключателя `merge_reorders` UI сохранение падало с `Invalid settings keys`, потому что ключа не было в backend allowlist (`ALLOWED_SETTINGS_KEYS` через `SYSADMIN_UI_DEFAULTS`).
+
+Параллельно потребовался owner-only режим просмотра заказов по скоупам: города / chat_group_key / конкретные чаты / провайдеры (TG/MAX), включаемый через sysadmin.
+
+### Решение
+
+1. В `admin_service` ключи зарегистрированы в `SYSADMIN_UI_DEFAULTS`:
+  - `merge_reorders=false`
+  - `orders_owner_scope_view=false`
+
+2. В `admin-web`:
+  - `DebugPage` получил переключатель `orders_owner_scope_view`.
+  - `OrdersPage` получил owner-only блок scope-фильтров (provider/city/group/chat) и scoped-рендер списка.
+
+3. Добавлен тест-контроль ключей в `admin_service/tests/test_settings_keys.py` (`ORDERS_BEHAVIOR_KEYS`).
+
+**Consequences**:
+- Сохранение sysadmin-настроек больше не падает на `merge_reorders`.
+- Owner может включать/выключать расширенный scope-view централизованно через sysadmin.
+- Scope-view не доступен не-owner ролям даже при наличии ключа (owner-only guard в UI).
+
+## 2026-05-18 — export-template-strict: сортировка position_order консистентна с distribution
+
+**Context**: Функция `export_orders_template_strict_xlsx` не сортировала `catalog_items` при подготовке экспорта, в отличие от `export_orders_template_distribution_xlsx`, которая применяла сортировку по `position_order` → `id`. Это привело к тому, что товарные колонки в strict экспорте могли отображаться в другом порядке, чем в distribution экспорте для одного и того же каталога, вызывая confusion.
+
+**Root cause**: В strict экспорте запрос `select(catalog_items).where(catalog_items.c.catalog_id.in_(catalog_ids))` выполнялся без `.order_by()`. В distribution экспорте была полная логика сортировки.
+
+### Решение
+
+В `export_orders_template_strict_xlsx` (line ~2768) добавлена идентичная сортировка:
+
+```python
+order_cols = [catalog_items.c.id.asc()]
+if _table_has_column(catalog_items, "position_order"):
+    order_cols = [
+        catalog_items.c.position_order.is_(None),
+        catalog_items.c.position_order.asc(),
+        catalog_items.c.id.asc(),
+    ]
+catalog_item_rows = db.execute(
+    select(catalog_items)
+    .where(catalog_items.c.catalog_id.in_(catalog_ids))
+    .order_by(*order_cols)
+).mappings().all()
+```
+
+**Результат**: обе функции теперь гарантированно выдают товарные позиции в одинаковом порядке (по position_order, затем по id). Это исключает иллюзию разницы между strict и distribution экспортами и упрощает оператору сравнение структуры выгрузок.
+
 ## 2026-05-XX — reverse pack_hint: вес пользователя → количество упаковок
 
 **Context**: Пользователь писал "картошка фри 2.5 кг" для товара с `unit_hint="уп"` и `pack_hint="2.5 кг"`. Парсер видел `unit="кг"` и не применял никакой конвертации (прямая конвертация требует `unit in ("уп","шт")`), что приводило к "2.5 кг" в экспорте при ожидаемом "1 уп".

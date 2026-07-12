@@ -3,7 +3,7 @@ title: Catalog as source of truth
 type: spec
 status: current
 tags: [catalog, parser, source-of-truth]
-updated: 2026-05-01
+updated: 2026-06-03
 related:
   - "[[05-parsing-rules]]"
   - "[[26-export-contract]]"
@@ -19,9 +19,11 @@ related:
 
 1. **Парсер не достраивает каталог.** Если в заказе встречается товар, которого нет в каталоге — позиция уходит в `unknown_item` / заказ становится `partial`/`needs_admin`. Никаких runtime-INSERT в `catalog_items` из обработчика заказов или admin-feed.
 2. **Заказы перепарсиваются по текущему каталогу**, а не каталог переписывается под старые заказы. Если оператор отредактировал каталог, запускаем reparse заказов.
-3. **`catalog_items.unit_hint` / `pack_hint`** диктуют единицу количества для матча. Текст сообщения клиента и заголовок Excel-шаблона на эту семантику не влияют.
-4. **Заголовки Excel-шаблона** — это только текстовые подписи для поиска нужной колонки. Никакого «125ГР» в заголовке не превращается в команду «писать в граммах».
-5. **Расширять каталог по факту** допускается только через `aliases` (синонимы для распознавания), не через создание новых SKU из runtime-эвристик.
+3. **Новый каталог не наследует прошлый ассортимент молча.** Пустое создание остаётся пустым; перенос ассортимента возможен только через явный clone/copy source.
+4. **`catalog_items.unit_hint` / `pack_hint`** диктуют единицу количества для матча. Текст сообщения клиента и заголовок Excel-шаблона на эту семантику не влияют.
+5. **Если пользователь не указал количество, parser не выдумывает его из `unit_hint`.** Matched-строка без явного qty остаётся `bad_qty` / `needs_admin`, а не превращается в `1 шт`, `1 уп` или `1 банка`.
+6. **Заголовки Excel-шаблона** — это только текстовые подписи для поиска нужной колонки. Никакого «125ГР» в заголовке не превращается в команду «писать в граммах».
+7. **Расширять каталог по факту** допускается только через `aliases` (синонимы для распознавания), не через создание новых SKU из runtime-эвристик.
 
 ## Куда смотреть в коде
 
@@ -38,6 +40,7 @@ related:
 > [!danger] Никогда
 > - INSERT в `catalog_items` из обработчика входящих заказов / `tg_updates`.
 > - Перезапись `catalog_items.title` по статистике из заказов.
+> - Выдумывание количества из одного только `unit_hint` / `pack_hint`, если пользователь его не написал.
 > - Превращение «125ГР» в заголовке Excel в семантику количества: для каталожных позиций единица всегда из `unit_hint`.
 > - Игнор `is_active = 0` / `stop_at` / `stop_until` при матче — остановленные позиции не должны утекать в активные заказы.
 
@@ -45,4 +48,6 @@ related:
 
 - `test_orders_export_template_matching.py::test_strict_template_export_writes_totals_and_matches_aliases`
 - `test_export_template_distribution_route.py::test_distribution_export_uses_catalog_units_*`
+- `test_export_template_distribution_route.py::test_pivot_export_uses_same_catalog_normalization_as_distribution_export`
+- `backend/tests/test_real_messages.py::test_ivanovo_customer_price_lines_require_explicit_quantity`
 - `test_orders_export_stability.py` (см. [[28-stability-playbook#тестовый-минимум]])
