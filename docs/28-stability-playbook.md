@@ -3,7 +3,7 @@ title: Stability playbook — orders / parser / catalog / export
 type: runbook
 status: current
 tags: [stability, runbook, parser, catalog, orders, export, regression]
-updated: 2026-05-01
+updated: 2026-07-15
 related:
   - "[[26-export-contract]]"
   - "[[26-catalog-source-of-truth]]"
@@ -66,6 +66,23 @@ related:
 - [ ] Если поменял окно дат / `_intersect_catalog_window` — нет ли регрессии «catalog_id beats stale dates»?
 - [ ] Если поменял рейт-лимит — обновлён `test_export_rate_limit.py`?
 - [ ] Если поменял UI-видимость поля — обновлены `bot_settings.export_*` ключи в `SYSADMIN_UI_DEFAULTS`?
+- [ ] Unresolved line не попала в товарную колонку через fuzzy similarity с
+  Excel header; её полный source text остался в колонке 4?
+
+## 4.1. Preservation gate для targeted reparse
+
+- [ ] Dry-run ограничен конкретными `catalog_id` и `reason_codes`; широкий
+  `all_orders` запускается только после отдельного обоснования.
+- [ ] `line_delta == 0` и `source_line_removed_count == 0`. Удалённая строка не
+  считается исправлением, даже если unresolved counter уменьшился.
+- [ ] Каждый `matched_quantity_decrease` разобран по source text и старому/new
+  SKU. Apply запрещён, пока не доказано, что снята ложная связь, а не товар.
+- [ ] Before/after audit сравнивает как минимум: число строк, hash/multiset
+  исходных текстов, SKU+canonical-unit totals и Excel product totals.
+- [ ] В Excel отдельно сверены data-row count и multiset колонки 4: сохранность
+  raw order text нельзя выводить только из совпадения SKU totals.
+- [ ] После apply те же проверки повторены на фактических DB/XLSX данных, а не
+  только на predicted dry-run state.
 
 ## 5. Безопасность как часть стабильности
 

@@ -90,3 +90,35 @@
 - Operator queue/API и targeted reparse сохраняют before/after и manual locks.
 - Final export/catalog close блокируются parser-health preflight; owner override аудируется.
 - Текущий live baseline/post-reparse snapshot находится в `runtime-reports/parser-health/current.{json,md}`. На 2026-07-13 глобально остаётся `616 unknown_item` и `39 bad_qty`; это не исправляется принудительными SKU. Для активного catalog 17: `35 unknown_item`, `0 bad_qty`, reparse дал `0 SKU/status changes`; требуются operator/catalog decisions.
+
+## Catalog conflict incident и preservation audit 2026-07-15
+
+- Все `290 catalog_conflict` старого snapshot были сгруппированы по source
+  catalog: `9=150`, `11=70`, `14=40`, `15=30`. У каждого каталога top candidate
+  повторял первую по id позицию со score `0`: conflict logic создавала кандидата
+  без лексического product evidence.
+- Общий fix запрещает zero-evidence conflicts, generic shell aliases и переходы
+  между несовместимыми product classes (fish/roe/fillet/canned/pate). Это не
+  SKU-specific whitelist.
+- Историческое падение `2478 → 2296` (`-182`) разложено по каталогам:
+  `9 +2`, `11 -186`, `14 +2`, `15 +1`, `17 -1`. Для catalog 11 удалена
+  дублированная последовательность строк: before/after distribution totals
+  совпали. Два старых `ВАНАМЕЙ` qty не имели явного количества; восемь единиц
+  `риета из тунца` были ошибочно связаны с единственным catalog SKU
+  `РИЕТ С КРАБОМ`. Это снятые ложные количества, не доказательство удаления
+  заказанного товара: исходные строки остаются в raw text/unknown queue.
+- Targeted dry-run/apply выполнен только для `reason_codes=[catalog_conflict]`
+  каталогов `9, 11, 14, 15`. После apply: общий line count неизменен (`2297`),
+  `line_delta=0`, `source_line_removed_count=0`, raw order hashes совпали.
+  Все уменьшения старых SKU вручную проверены как false links; товары остались
+  в исходном заказе и unresolved queue.
+- Strict catalog-driven Excel больше не назначает unresolved line в товарную
+  колонку по похожему header. В before/after workbook совпадают data-row count и
+  multiset колонки 4; SKU totals теперь отражают только catalog-linked lines.
+- Sanitized parser-health report содержит top-3 candidate SKU/score/strategy,
+  conflict flags и source catalog, а также фактические runtime flags. На момент
+  проверки runtime: embeddings enabled, reranker `production`, LLM `disabled`,
+  auto-match requested/effective включён при holdout false-confident rate `0.0`.
+- Audit-only workbook сравнение выполнялось без catalog date-window preflight.
+  Production export catalog 9 всё ещё требует отдельной правки данных окна
+  (`opened_at > closed_at`); parser repair не выдаётся за исправление этого 204.

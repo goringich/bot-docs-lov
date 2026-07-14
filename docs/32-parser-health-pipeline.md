@@ -3,7 +3,7 @@ title: Parser health pipeline — typed decisions, diagnostics, shadow AI and fi
 type: spec
 status: current
 tags: [parser, catalog, diagnostics, ai, reparse, monitoring]
-updated: 2026-07-13
+updated: 2026-07-15
 related:
   - "[[26-catalog-source-of-truth]]"
   - "[[28-stability-playbook]]"
@@ -44,6 +44,10 @@ entrypoint для worker, replay, import и reparse. Legacy parser functions о�
 - `catalog_items` никогда не создаются из заказов.
 - Quantity без числа не выводится из unit/pack hint.
 - Exact/operator alias является catalog truth, но fish→roe остаётся hard conflict.
+- `catalog_conflict` может прикрепляться только к кандидату с лексическим
+  product evidence. Нулевой конфликт с несвязанной первой строкой каталога не
+  является кандидатом. Generic alias (`риет`, `паштет`, `филе`) не может стереть
+  явно указанное сырьё или product class клиента.
 - `missing_catalog_coverage` ставит оператор; `no_candidates` сам по себе не
   доказывает отсутствие товара в source catalog.
 - Auto-match разрешён только без conflict flags, при достаточных score/margin
@@ -94,6 +98,11 @@ budget exhaustion или SKU вне списка дают abstention.
 Automatic mode требует отдельного holdout/shadow safety review. Наличие флага
 само по себе недостаточно: gate требует false-confident rate `<= 0.001`.
 
+Git snapshot показывает не предполагаемые defaults, а фактически вычисленные в
+процессе reporter значения: `embeddings_enabled`, `reranker_mode/enabled`,
+`llm_mode/enabled`, `auto_match_requested/effective` и измеренный holdout rate.
+Endpoint/model URL, токены и другие секреты в snapshot не попадают.
+
 ## Operator flow
 
 Owner queue живёт в Analytics:
@@ -133,6 +142,11 @@ docker-compose -f infra/docker-compose.yml --profile ops run --rm parser_health_
 Timer templates: `infra/systemd/otlichniy-parser-health.{service,timer}`.
 PII guard выполняется до записи файлов и DB snapshot.
 
+Для каждого top unresolved cluster sanitized JSON/Markdown содержит до трёх
+кандидатов: `rank`, `sku`, `score`, `strategy`, `conflict_flags` и
+`source_catalog_id`. В report запрещены internal item/order/user identifiers и
+исходный customer text; fragment проходит PII sanitizer и ограничение длины.
+
 `infra/publish_parser_health_report.sh` генерирует snapshot, а при явном
 `PARSER_HEALTH_GIT_PUBLISH=1` коммитит только stable report paths и отправляет
 их существующим private Git transport. Таймер запускается ежечасно через
@@ -145,11 +159,17 @@ API: `POST /parser-health/reparse`.
 
 Dry-run по умолчанию. Результат содержит `scanned`, `changed`, `resolved`,
 `still_unresolved`, `sku_changed`, `status_changed`, `segmentation_changes`,
-`possible_false_matches`, `manual_locked`, `errors`
-и bounded before/after samples. Manual lock действует только в той же версии
-каталога; новая catalog version/alias или явный owner reparse снимают его
-контролируемо. Idempotency обеспечивается key в
-`parser_reparse_jobs`.
+`possible_false_matches`, `line_delta`, `source_line_removed_count`,
+`matched_quantity_decrease_count`, `preservation_review_required`,
+`manual_locked`, `errors` и bounded before/after/review samples.
+
+Удаление строки или уменьшение ранее matched SKU quantity никогда не считается
+`resolved`: это preservation review. До apply оператор обязан сопоставить
+source fingerprints, SKU totals и Excel product totals. Для incident repair
+используется самый узкий reason-code/catalog scope; `all_orders` не заменяет
+целевой dry-run. Manual lock действует только в той же версии каталога; новая
+catalog version/alias или явный owner reparse снимают его контролируемо.
+Idempotency обеспечивается key в `parser_reparse_jobs`.
 
 ## Rollback
 
