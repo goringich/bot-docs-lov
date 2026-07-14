@@ -1,0 +1,161 @@
+---
+title: Parser health pipeline — typed decisions, diagnostics, shadow AI and final preflight
+type: spec
+status: current
+tags: [parser, catalog, diagnostics, ai, reparse, monitoring]
+updated: 2026-07-13
+related:
+  - "[[26-catalog-source-of-truth]]"
+  - "[[28-stability-playbook]]"
+  - "[[26-export-contract]]"
+---
+
+# Parser health pipeline
+
+## Production flow
+
+```text
+provider ingress
+→ normalization
+→ intent
+→ metadata
+→ segmentation
+→ explicit quantity
+→ current-catalog candidate generation
+→ deterministic ranking
+→ local Ollama semantic retrieval (`nomic-embed-text`)
+→ calibrated reranker
+→ constrained local LLM fallback (only when enabled)
+→ score/margin/conflict + holdout safety gate
+→ status mapping
+→ structured diagnostics
+→ operator resolution
+→ targeted reparse
+→ final preflight
+```
+
+`backend/app/order_processing.py::run_order_pipeline_with_db` — общий typed
+entrypoint для worker, replay, import и reparse. Legacy parser functions остаются
+совместимыми adapters.
+
+## Safety contract
+
+- Candidate universe — только текущий `catalog_id`.
+- `catalog_items` никогда не создаются из заказов.
+- Quantity без числа не выводится из unit/pack hint.
+- Exact/operator alias является catalog truth, но fish→roe остаётся hard conflict.
+- `missing_catalog_coverage` ставит оператор; `no_candidates` сам по себе не
+  доказывает отсутствие товара в source catalog.
+- Auto-match разрешён только без conflict flags, при достаточных score/margin
+  и `PARSER_AI_HOLDOUT_FALSE_CONFIDENT_RATE <= 0.001`. Без измеренной holdout
+  метрики semantic/LLM возвращают abstention.
+- Manual decision ставит `manual_lock`; reparse не меняет такую строку.
+
+## Structured storage
+
+Миграции:
+
+- `m9n0o1p2q3r4` — `parser_runs`, `parser_line_decisions`, resolutions,
+  reparse jobs и model registry;
+- `n0o1p2q3r4s5` — operator examples, AI cache и health snapshots;
+- `o1p2q3r4s5t6` — `order_line_id ON DELETE SET NULL`, чтобы rebuild сохранял
+  before-history diagnostics.
+
+`raw_text` остаётся только в order source. Diagnostics хранит normalized
+fragment, offsets, safe hash, score/margin, candidates, conflicts, reason,
+parser/model versions и decision source.
+
+## Reasons
+
+Основные machine-readable reasons:
+
+`no_candidates`, `low_score`, `ambiguous_margin`, `catalog_conflict`,
+`unit_conflict`, `quantity_missing`, `segmentation_error`,
+`missing_catalog_coverage`, `intent_uncertain`, `stale_reparse`,
+`ai_schema_error`, `ai_timeout`, `ai_disagreement`,
+`legacy_or_unspecified`.
+
+## AI mode
+
+Default flags:
+
+```env
+PARSER_EMBEDDINGS_ENABLED=1
+PARSER_RERANKER_MODE=production
+PARSER_LLM_MODE=disabled
+PARSER_AI_AUTO_MATCH=0
+```
+
+Local Ollama embeddings (`nomic-embed-text`) and calibrated pair reranker
+расширяют только catalog-scoped candidates. Constrained LLM boundary принимает только
+обезличенный fragment, quantity/unit и candidates; schema violation, timeout,
+budget exhaustion или SKU вне списка дают abstention.
+
+Automatic mode требует отдельного holdout/shadow safety review. Наличие флага
+само по себе недостаточно: gate требует false-confident rate `<= 0.001`.
+
+## Operator flow
+
+Owner queue живёт в Analytics:
+
+- посмотреть reason, score/margin и top candidates;
+- выбрать существующий SKU;
+- подтвердить catalog gap;
+- отметить correction и запустить dry-run targeted reparse.
+
+Подтверждённый owner existing SKU добавляет trusted normalized alias только
+этому существующему catalog item и запускает targeted reparse всего cluster
+для текущей версии каталога. Каждое решение пишет audit, resolution event и
+`parser_operator_examples` с positive/negative candidate evidence.
+
+## Final preflight
+
+Strict/distribution/pivot, final `/exports/build` и закрытие каталога блокируются,
+если есть unresolved unknown/bad_qty, pending/failed reparse или строки без
+diagnostics после миграции.
+
+Owner override требует re-auth, reason/comment и audit. Intake не блокируется.
+
+## Reports and scheduling
+
+Stable GitHub surfaces:
+
+- `runtime-reports/parser-health/current.json`;
+- `runtime-reports/parser-health/current.md`;
+- `runtime-reports/parser-health/history/YYYY-MM-DD.json`.
+
+One-shot generation:
+
+```sh
+docker-compose -f infra/docker-compose.yml --profile ops run --rm parser_health_reporter
+```
+
+Timer templates: `infra/systemd/otlichniy-parser-health.{service,timer}`.
+PII guard выполняется до записи файлов и DB snapshot.
+
+`infra/publish_parser_health_report.sh` генерирует snapshot, а при явном
+`PARSER_HEALTH_GIT_PUBLISH=1` коммитит только stable report paths и отправляет
+их существующим private Git transport. Таймер запускается ежечасно через
+`flock`; публикация по умолчанию выключена и не требует хранения GitHub token
+в репозитории.
+
+## Reparse
+
+API: `POST /parser-health/reparse`.
+
+Dry-run по умолчанию. Результат содержит `scanned`, `changed`, `resolved`,
+`still_unresolved`, `sku_changed`, `status_changed`, `segmentation_changes`,
+`possible_false_matches`, `manual_locked`, `errors`
+и bounded before/after samples. Manual lock действует только в той же версии
+каталога; новая catalog version/alias или явный owner reparse снимают его
+контролируемо. Idempotency обеспечивается key в
+`parser_reparse_jobs`.
+
+## Rollback
+
+1. Выключить new intake path rollback-deploy предыдущего backend image.
+2. Оставить diagnostics tables — они additive и не меняют catalog/orders.
+3. При полном schema rollback: `alembic downgrade l8m9n0o1p2q3` только после
+   выгрузки operator events/examples.
+4. Откат targeted reparse выполняется по audited before-state; `raw_text`
+   остаётся неизменным источником повторного rebuild.

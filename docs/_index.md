@@ -35,11 +35,13 @@ updated: 2026-05-01
 
 - [[05-parsing-rules]] — что распознаём, что нет, лимиты количества.
 - [[26-catalog-source-of-truth]] — почему каталог нельзя «доучивать» из заказов *(новое)*.
+- [[32-parser-health-pipeline]] — typed parser, diagnostics, shadow AI, repair queue, reparse и final preflight.
 - [[changelog/codex-project-memory]] — короткая «живая» память по парсеру и каталогу.
 
 ## 📝 Заказы
 
 - [[28-stability-playbook]] — правила стабильности заказов *(новое)*.
+- [[32-parser-health-pipeline]] — health monitoring и zero-unresolved lifecycle.
 - [[08-admin-flows]] — операционные сценарии (открытие/закрытие раздачи, ручной импорт каталога).
 - [[12-admin-panel]] — карта `admin-web`, разделы и роли.
 

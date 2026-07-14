@@ -42,6 +42,9 @@ related:
 | Юниты | Только через `_normalize_unit`. Никаких ad-hoc «if 'г' in text». |
 | Распознавание дробей / диапазонов | Тестируется на real-shape сообщениях (см. `tests/test_parser_upgrade.py`). |
 | Изменения парсера | Обязательно — регрессионный тест с реальной формулировкой клиента (в комментарии — источник). |
+| Typed runtime | Worker/replay/reparse вызывают `run_order_pipeline_with_db`; legacy API — только adapter. |
+| Diagnostics | Успешные и unresolved решения сохраняют score/margin/candidates/reason/version. |
+| AI | Только shadow по умолчанию; auto-match запрещён без holdout safety gate. |
 
 ## 3. Каталог (`catalogs`, `catalog_items`)
 
@@ -94,6 +97,11 @@ python -m pytest -q \
 
 # Frontend
 cd admin-web && npm run test
+
+# Gold evaluator safety gate
+cd backend && python scripts/evaluate_parser_gold.py \
+  --corpus tests/fixtures/parser_gold/v2.json --matcher current \
+  --compare tests/fixtures/parser_gold/baseline-v2-legacy.json
 ```
 
 CI-эквивалент см. в [[../.github/workflows/ci.yml]].

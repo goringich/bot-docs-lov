@@ -80,3 +80,13 @@
 3. Если export строится, но строки пустые, сначала считать это симптомом catalog coverage gap.
 4. Чинить матчинг общими правилами, а не одноразовыми SKU-исключениями, если проблема действительно в нормализации.
 5. После любого исправления проверять не только тесты, но и хотя бы один живой export на реальном каталоге, если среда это позволяет.
+
+## Parser health modernization 2026-07-13
+
+- Production entrypoint: `run_order_pipeline_with_db`, parser `typed-v3`.
+- Matcher auto-select требует score `0.86` и margin `0.08`; conflicts дают abstention.
+- Structured diagnostics хранятся в `parser_runs/parser_line_decisions`, а не только в `error_text`.
+- AI фактически работает только как local shadow reranker; external LLM и auto-match выключены.
+- Operator queue/API и targeted reparse сохраняют before/after и manual locks.
+- Final export/catalog close блокируются parser-health preflight; owner override аудируется.
+- Текущий live baseline/post-reparse snapshot находится в `runtime-reports/parser-health/current.{json,md}`. На 2026-07-13 глобально остаётся `616 unknown_item` и `39 bad_qty`; это не исправляется принудительными SKU. Для активного catalog 17: `35 unknown_item`, `0 bad_qty`, reparse дал `0 SKU/status changes`; требуются operator/catalog decisions.

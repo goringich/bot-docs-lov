@@ -120,6 +120,8 @@ else:
 - Все ячейки прогоняются через `_sanitize_excel_value` — защита от формула-инъекции (`=`, `+`, `-`, `@` в начале строки).
 - Рейт-лимит: heavy-эндпоинты (`/orders/export*`, `/exports/build`) идут в bucket `export` (20 req/min). `/exports/presets` — в `security` (60 req/min). См. [[31-rate-limit-buckets]].
 - Pickup-scope: `_apply_pickup_scope_filter` режет выгрузку по точкам, привязанным к текущему `pickup_admin`.
+- Final strict/distribution/pivot и `/exports/build` проходят parser-health preflight. Unresolved `unknown_item`, неразрешённый `bad_qty`, pending reparse или stale/missing diagnostics блокируют выгрузку.
+- Owner override допустим только после password confirmation, с reason/comment и audit event `export.parser_health_override`.
 
 ## Регрессионная сетка
 
