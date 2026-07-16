@@ -54,6 +54,10 @@ entrypoint для worker, replay, import и reparse. Legacy parser functions о�
   и `PARSER_AI_HOLDOUT_FALSE_CONFIDENT_RATE <= 0.001`. Без измеренной holdout
   метрики semantic/LLM возвращают abstention.
 - Manual decision ставит `manual_lock`; reparse не меняет такую строку.
+- Quantity-first (`2 шт форели`) и descriptor continuation сохраняют одну
+  source line; явное количество нельзя отделить от товара metadata/newline
+  эвристикой. Pickup aliases после standalone parsing всегда канонизируются
+  обратно в operator-owned `PickupPlace.title`.
 
 ## Structured storage
 
@@ -94,6 +98,12 @@ Local Ollama embeddings (`nomic-embed-text`) and calibrated pair reranker
 расширяют только catalog-scoped candidates. Constrained LLM boundary принимает только
 обезличенный fragment, quantity/unit и candidates; schema violation, timeout,
 budget exhaustion или SKU вне списка дают abstention.
+
+Semantic layer запускается только после deterministic abstention. Он не имеет
+права переиграть `ambiguous_margin`, product/form conflict или unit conflict;
+missing catalog coverage остаётся operator decision. Offline gold v2 содержит
+раздельные tuning/validation/holdout catalogs и проверяет одновременно top-1,
+quantity/unit, status/end-to-end и нулевой false-confident rate.
 
 Automatic mode требует отдельного holdout/shadow safety review. Наличие флага
 само по себе недостаточно: gate требует false-confident rate `<= 0.001`.
@@ -146,6 +156,9 @@ PII guard выполняется до записи файлов и DB snapshot.
 кандидатов: `rank`, `sku`, `score`, `strategy`, `conflict_flags` и
 `source_catalog_id`. В report запрещены internal item/order/user identifiers и
 исходный customer text; fragment проходит PII sanitizer и ограничение длины.
+Отдельный `catalog_conflict_summary` агрегирует текущее число конфликтов по
+source catalog и sanitized top candidate SKU, чтобы нулевой/массовый кандидат
+был виден без чтения customer fragments.
 
 `infra/publish_parser_health_report.sh` генерирует snapshot, а при явном
 `PARSER_HEALTH_GIT_PUBLISH=1` коммитит только stable report paths и отправляет
@@ -170,6 +183,26 @@ source fingerprints, SKU totals и Excel product totals. Для incident repair
 целевой dry-run. Manual lock действует только в той же версии каталога; новая
 catalog version/alias или явный owner reparse снимают его контролируемо.
 Idempotency обеспечивается key в `parser_reparse_jobs`.
+
+`archive_non_orders=true` — отдельный opt-in для уже сохранённых сообщений,
+которые новый intent classifier подтвердил как не-заказы. Автоматический
+soft-archive разрешён только когда ни before-, ни after-state не содержит
+явного количества. `raw_text` и существующие `order_lines` не удаляются;
+snapshot исключает архивную запись через active-order join. Сообщение с любым
+quantity блокируется для operator review.
+
+Startup/online catalog-heal не является archival workflow и работает
+fail-closed. Он сохраняет заказ целиком и считает отдельные counters, если:
+
+- новый intent больше не считает source message заказом;
+- source message принадлежит admin/senderless feed;
+- predicted state уменьшает matched SKU quantity, число строк или теряет
+  fingerprint исходной строки.
+
+Такие записи попадают соответственно в `non_order_skipped`,
+`admin_origin_skipped` или `preservation_blocked`; `updated` не увеличивается.
+Обычный targeted reparse без `archive_non_orders=true` также не имеет права
+пересобрать подтверждённый non-order в пустой набор строк.
 
 ## Rollback
 

@@ -122,3 +122,64 @@
 - Audit-only workbook сравнение выполнялось без catalog date-window preflight.
   Production export catalog 9 всё ещё требует отдельной правки данных окна
   (`opened_at > closed_at`); parser repair не выдаётся за исправление этого 204.
+
+## Общий parser/ML hardening 2026-07-15
+
+- Исправлены общие real-shape правила без SKU whitelist: quantity-first
+  (`2 шт форели`), comma-separated descriptor continuation, canonical pickup
+  alias fallback и fuzzy pickup, где generic `самовывоз` не является адресом.
+- Широкий species alias больше не стирает явный preparation form: например,
+  `Корюшка с/м` не может выбрать `Корюшка вяленая`.
+- Weight↔discrete conversion разрешён только через явный `pack_hint`. В seed
+  реального каталога у 1-кг упаковок мёда зафиксирован `pack_hint=1 кг`;
+  отсутствие pack metadata остаётся `unit_conflict`.
+- Live Ivanovo regression `Камбала 1 шт / Креветки 250+ 1уп` намеренно остаётся
+  unresolved: первой позиции нет в source catalog, у второй catalog unit `кг`
+  без pack conversion. Требование случайного `ok` удалено и заменено проверкой
+  `no_candidates + unit_conflict`.
+- Parser/pickup/live-message набор: `397 passed`. Gold v2: top-1,
+  segmentation, metadata, quantity/unit, line status и end-to-end = `1.0`;
+  deterministic и AI-shadow false-confident rate = `0.0`.
+- Post-hardening `catalog_conflict` dry-run: catalog `9` scanned `0`, catalogs
+  `14/15` дали `0 changes`; catalog `11` дал только два representation/metadata
+  changes (`no_pickup` catalog и нормализация unresolved title), без SKU/status
+  улучшения, с одним preservation review. Apply намеренно не выполнялся: он не
+  исправлял товар и не проходил нулевой review gate.
+
+## Финальный targeted repair и startup safety 2026-07-15
+
+- Найден и закрыт опасный legacy path: startup/online catalog-heal при новом
+  `intent_not_order` делал `order.lines.clear()`. Теперь broad heal пропускает
+  non-order/admin-origin и блокирует любое уменьшение SKU quantity, line count
+  или source fingerprint. Live restart catalog 17 подтвердил:
+  `scanned=37`, `updated=0`, `non_order_skipped=1`, `preservation_blocked=0`.
+- До этого guard один availability-вопрос без числа уже потерял ложную
+  `bad_qty` строку. Это не засчитано как repair и строка не реконструировалась
+  догадкой. Raw source и parser diagnostics доказывают вопрос без заказанного
+  количества; явный `archive_non_orders=true` только soft-archive source и не
+  удалил дополнительных строк.
+- Дополнительный exact-scope dry-run/apply catalog 11 исправил три real-shape
+  записи: `Марина/Мария` больше не превращаются в SKU `Маринад`; `тунец ×5`
+  сохранён, строка с сёмгой сохранена unresolved, `клубника ×1 ящик` восстановлена
+  как отдельная unresolved позиция. `line_delta=-2` относится только к двум
+  metadata false lines; matched SKU quantity decrease = `0`; raw hashes равны.
+- В catalog 14 вручную подтверждён `риет с крабом ×2`; apply дал
+  `line_delta=0`, matched SKU quantity decrease = `0`. Соседняя склеенная строка
+  `риет/паштет/минтай` оставлена operator review и не форсирована.
+- Full distribution Excel v12→v13: data-row count и multiset `Текст заказа`
+  совпали для catalogs `9=167`, `11=137`, `14=127`, `15=27`. Единственное
+  изменение product totals: catalog 14 `РИЕТ С КРАБ +2`; catalogs 9/11/15 —
+  без product delta.
+- Sanitized live snapshot после repair: `810 orders / 2294 lines`,
+  `ok=1709`, `unknown_item=545`, `bad_qty=40`; reasons:
+  `matched=342`, `qty_missing=18`, `unit_conflict=3`, `low_score=243`,
+  `catalog_conflict=67`, `ambiguous_margin=4`. Health остаётся `blocked`:
+  оставшиеся abstentions требуют source-catalog/operator решений, а не
+  принудительного auto-match.
+- Фактические runtime flags snapshot: embeddings `true`, reranker
+  `production/true`, LLM `disabled/false`, auto-match requested/effective
+  `true/true`, holdout false-confident rate `0.0`, external AI calls `0`.
+- Проверка: parser/reparse/replay suite `456 passed`; обязательный export
+  contract `43 passed`; POST preflight в production Python 3.12 `13 passed`;
+  API/admin health green. Локальный Python 3.14 TestClient по-прежнему зависает,
+  поэтому production preflight проверен в собранном контейнере.
