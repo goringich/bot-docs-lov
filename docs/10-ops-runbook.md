@@ -40,6 +40,30 @@ Worker обрабатывает очередь `tg_updates`.
 
 - `npm install && npm run dev` в `admin-web/`
 
+### CachyOS: локальный и Tailscale-доступ
+
+На CachyOS админка публикуется **только** на двух интерфейсах одного контейнера:
+
+- локально: `http://127.0.0.1:${ADMIN_WEB_PORT:-4173}/login`;
+- в tailnet: `http://${ADMIN_WEB_NETWORK_BIND_IP}:${ADMIN_WEB_NETWORK_PORT}/login`.
+
+Для текущего узла значения `ADMIN_WEB_NETWORK_BIND_IP=100.76.165.75` и
+`ADMIN_WEB_NETWORK_PORT=4173`. `ADMIN_WEB_URL` и
+`ADMIN_API_CORS_ORIGINS` должен включать этот сетевой URL, а также
+`http://localhost:4173` и `http://127.0.0.1:4173` для loopback-разработки;
+`ADMIN_WEB_URL` остаётся сетевым URL для magic links и Host allowlist. Не публикуйте наружу
+`8010` (admin API), `8000` (webhook API), `3306` (MySQL) или `4040` (ngrok).
+
+После изменения этих переменных или `infra/docker-compose.yml` примените:
+
+```bash
+cd infra
+docker compose --env-file ../.env up -d --force-recreate admin_service admin_web
+curl -I http://127.0.0.1:4173/login
+curl -I http://100.76.165.75:4173/login
+```
+
+
 ## Обновление кода
 
 1) подтянуть изменения (git pull)
@@ -61,7 +85,7 @@ Worker обрабатывает очередь `tg_updates`.
 
 ```bash
 cd infra
-docker compose up -d --build
+docker compose --env-file ../.env up -d --build
 ```
 
 Сокращённые команды через Makefile:
@@ -76,7 +100,7 @@ make compose-down
 
 ```bash
 cd infra
-docker compose up -d --build api worker admin_service admin_web
+docker compose --env-file ../.env up -d --build api worker admin_service admin_web
 ```
 
 > Если `admin_service` недавно менялся, обычного `restart` может быть недостаточно: сервис собирается из Docker image, поэтому для подхвата кода нужен именно `docker compose up -d --build admin_service`.
@@ -85,7 +109,7 @@ docker compose up -d --build api worker admin_service admin_web
 
 ```bash
 cd infra
-docker compose down
+docker compose --env-file ../.env down
 ```
 
 ## Проверка работоспособности
@@ -134,7 +158,7 @@ docker compose down
 
 ```bash
 cd infra
-docker compose exec api alembic upgrade heads
+docker compose --env-file ../.env exec api alembic upgrade heads
 ```
 
 ## Бэкап и восстановление БД
