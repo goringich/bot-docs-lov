@@ -3,7 +3,7 @@ title: Stability playbook — orders / parser / catalog / export
 type: runbook
 status: current
 tags: [stability, runbook, parser, catalog, orders, export, regression]
-updated: 2026-07-15
+updated: 2026-07-24
 related:
   - "[[26-export-contract]]"
   - "[[26-catalog-source-of-truth]]"
@@ -44,7 +44,7 @@ related:
 | Изменения парсера | Обязательно — регрессионный тест с реальной формулировкой клиента (в комментарии — источник). |
 | Typed runtime | Worker/replay/reparse вызывают `run_order_pipeline_with_db`; legacy API — только adapter. |
 | Diagnostics | Успешные и unresolved решения сохраняют score/margin/candidates/reason/version. |
-| AI | Только shadow по умолчанию; auto-match запрещён без holdout safety gate. |
+| AI | Только shadow/recommendation по умолчанию; auto-match fail-closed без свежего version-matched evaluation artifact (ручной env-rate не gate). |
 
 ## 3. Каталог (`catalogs`, `catalog_items`)
 
@@ -83,6 +83,11 @@ related:
   raw order text нельзя выводить только из совпадения SKU totals.
 - [ ] После apply те же проверки повторены на фактических DB/XLSX данных, а не
   только на predicted dry-run state.
+- [ ] Apply запускался только после clean dry-run; при quantity decrease,
+  source-line removal, mapped-SKU substitution, segmentation change, execution
+  error или raw-text invariant violation он должен остаться blocked.
+- [ ] Historical debt другого закрытого catalog не использован как причина
+  блокировать operational export выбранного catalog.
 
 ## 5. Безопасность как часть стабильности
 
@@ -118,7 +123,7 @@ cd admin-web && npm run test
 # Gold evaluator safety gate
 cd backend && python scripts/evaluate_parser_gold.py \
   --corpus tests/fixtures/parser_gold/v2.json --matcher current \
-  --compare tests/fixtures/parser_gold/baseline-v2-legacy.json
+  --compare tests/fixtures/parser_gold/baseline-v2-current.json
 ```
 
 CI-эквивалент см. в [[../.github/workflows/ci.yml]].

@@ -3,7 +3,7 @@ title: Parser health pipeline — typed decisions, diagnostics, shadow AI and fi
 type: spec
 status: current
 tags: [parser, catalog, diagnostics, ai, reparse, monitoring]
-updated: 2026-07-15
+updated: 2026-07-24
 related:
   - "[[26-catalog-source-of-truth]]"
   - "[[28-stability-playbook]]"
@@ -51,8 +51,10 @@ entrypoint для worker, replay, import и reparse. Legacy parser functions о�
 - `missing_catalog_coverage` ставит оператор; `no_candidates` сам по себе не
   доказывает отсутствие товара в source catalog.
 - Auto-match разрешён только без conflict flags, при достаточных score/margin
-  и `PARSER_AI_HOLDOUT_FALSE_CONFIDENT_RATE <= 0.001`. Без измеренной holdout
-  метрики semantic/LLM возвращают abstention.
+  и валидном evaluation artifact. `PARSER_AI_HOLDOUT_FALSE_CONFIDENT_RATE` и
+  любое ручное число в environment не являются safety gate. При отсутствующем,
+  устаревшем или version/catalog-mismatched artifact semantic/LLM возвращают
+  abstention (fail-closed).
 - Manual decision ставит `manual_lock`; reparse не меняет такую строку.
 - Quantity-first (`2 шт форели`) и descriptor continuation сохраняют одну
   source line; явное количество нельзя отделить от товара metadata/newline
@@ -105,8 +107,29 @@ missing catalog coverage остаётся operator decision. Offline gold v2 с�
 раздельные tuning/validation/holdout catalogs и проверяет одновременно top-1,
 quantity/unit, status/end-to-end и нулевой false-confident rate.
 
-Automatic mode требует отдельного holdout/shadow safety review. Наличие флага
-само по себе недостаточно: gate требует false-confident rate `<= 0.001`.
+Automatic mode требует отдельного проверяемого evaluation artifact, созданного
+из leakage-safe operator/gold holdout. Наличие флага само по себе недостаточно.
+Artifact обязан содержать dataset/version hash, число размеченных примеров,
+precision, false-confident rate, hard-negative violations, время генерации,
+parser/model/catalog versions и `passed_safety_gate=true`. Минимальная выборка
+— 50, precision — 0.99, false-confident rate — не выше 0.001, hard-negative
+violations — 0; artifact старше 30 дней или не совпадающий с текущей версией
+каталога запрещает auto-match.
+
+`lexical_diagnostic_shadow` — отдельный offline diagnostic path; его метрики
+никогда не называются Ollama/production semantic результатом. В отчёте и
+diagnostics раздельны `deterministic_match`, `real_embedding_retrieval`,
+`real_calibrated_reranker`, `lexical_diagnostic_shadow`, `constrained_llm` и
+`operator_decision`. Retrieval лишь формирует кандидатов; final selection всё
+равно проходит catalog scope, product-class/form, unit и margin constraints.
+
+Item embeddings кэшируются по `catalog_id + catalog_version + model + feature
+schema`; отдельный embedding фрагмента считается на запрос. Версия включает
+title, aliases, unit и pack, поэтому любое такое изменение инвалидирует cache.
+Representation добавляет product/class/form/brand/unit/pack/aliases из уже
+имеющегося catalog text — миграция для новых полей не нужна. Недоступность
+Ollama остаётся безопасным abstention/fallback, не software-rendering и не
+понижением порогов.
 
 Git snapshot показывает не предполагаемые defaults, а фактически вычисленные в
 процессе reporter значения: `embeddings_enabled`, `reranker_mode/enabled`,
@@ -122,16 +145,29 @@ Owner queue живёт в Analytics:
 - подтвердить catalog gap;
 - отметить correction и запустить dry-run targeted reparse.
 
-Подтверждённый owner existing SKU добавляет trusted normalized alias только
-этому существующему catalog item и запускает targeted reparse всего cluster
-для текущей версии каталога. Каждое решение пишет audit, resolution event и
-`parser_operator_examples` с positive/negative candidate evidence.
+Подтверждённый owner existing SKU проверяет принадлежность текущему catalog,
+добавляет только не-generic, class-compatible trusted normalized alias этому
+существующему item и запускает targeted reparse cluster только из той же
+catalog version. Каждое решение пишет audit, resolution event и
+`parser_operator_examples` с positive/negative candidate evidence. Остальные
+явные outcomes: catalog gap, segmentation correction, quantity correction,
+approved `bad_qty` exception и confirmed non-order; последний никогда не
+архивирует сообщение с quantity автоматически.
 
 ## Final preflight
 
 Strict/distribution/pivot, final `/exports/build` и закрытие каталога блокируются,
 если есть unresolved unknown/bad_qty, pending/failed reparse или строки без
 diagnostics после миграции.
+
+Preflight всегда получает выбранный `catalog_id`: operational health считает
+только его текущую операцию. Ошибки закрытых каталогов публикуются отдельно как
+historical debt и не блокируют экспорт/закрытие другого каталога. Regression
+health показывает новые входящие за ограниченное окно и разбивку по
+parser/model version. Snapshot хранит только hashed stable decision identities:
+`created`, `resolved`, `reopened` и `reason changed` считаются по переходам
+состояний, а не разностью общих счётчиков, поэтому взаимная компенсация ошибок
+невозможна.
 
 Owner override требует re-auth, reason/comment и audit. Intake не блокируется.
 
@@ -170,11 +206,15 @@ source catalog и sanitized top candidate SKU, чтобы нулевой/мас�
 
 API: `POST /parser-health/reparse`.
 
-Dry-run по умолчанию. Результат содержит `scanned`, `changed`, `resolved`,
+Dry-run по умолчанию и обязателен перед любым apply. Результат содержит `scanned`, `changed`, `resolved`,
 `still_unresolved`, `sku_changed`, `status_changed`, `segmentation_changes`,
 `possible_false_matches`, `line_delta`, `source_line_removed_count`,
 `matched_quantity_decrease_count`, `preservation_review_required`,
-`manual_locked`, `errors` и bounded before/after/review samples.
+`manual_locked`, `errors` и bounded before/after/review samples. Apply
+fail-closed, если dry-run нашёл уменьшение matched quantity, исчезновение
+source line, необъяснимую смену уже matched SKU, изменение segmentation,
+execution error или нарушение `raw_text` invariant; ответ содержит
+`apply_blocked` и machine-readable причины, но не выполняет mutation.
 
 Удаление строки или уменьшение ранее matched SKU quantity никогда не считается
 `resolved`: это preservation review. До apply оператор обязан сопоставить
@@ -183,6 +223,12 @@ source fingerprints, SKU totals и Excel product totals. Для incident repair
 целевой dry-run. Manual lock действует только в той же версии каталога; новая
 catalog version/alias или явный owner reparse снимают его контролируемо.
 Idempotency обеспечивается key в `parser_reparse_jobs`.
+
+Backlog prioritizes open catalog, cluster recurrence, age, reason, score/margin,
+safe candidate и risk quantity/SKU/segmentation. Он не очищается архивированием,
+удалением diagnostics или сменой статуса без evidence. Before/after summaries
+сохраняют только sanitized correlations, а production DB используется read-only
+для анализа до отдельного owner-confirmed mutation.
 
 `archive_non_orders=true` — отдельный opt-in для уже сохранённых сообщений,
 которые новый intent classifier подтвердил как не-заказы. Автоматический
