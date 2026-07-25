@@ -3,7 +3,7 @@ title: Parser health pipeline — typed decisions, diagnostics, shadow AI and fi
 type: spec
 status: current
 tags: [parser, catalog, diagnostics, ai, reparse, monitoring]
-updated: 2026-07-24
+updated: 2026-07-25
 related:
   - "[[26-catalog-source-of-truth]]"
   - "[[28-stability-playbook]]"
@@ -11,6 +11,23 @@ related:
 ---
 
 # Parser health pipeline
+
+## Ingress перед order parser
+
+Worker сначала отделяет операторские публикации от клиентских сообщений.
+Подтверждённый admin/sender-chat product post при включённом
+`feature_catalog_admin_post_sync` синхронизирует текущий каталог (или создаёт
+его, если открытого нет), применяет безопасные aliases из
+`catalog_item_memory`, затем запускает preservation-safe reparse. При
+выключенном флаге публикация всё равно потребляется как admin-origin и не может
+стать заказом. Клиентский текст ни при каких настройках не меняет каталог.
+
+Если order-like сообщение пришло без открытого каталога, сохраняются исходный
+`tg_update` и snapshot `*_order_without_catalog`. Автосоздание каталога может
+восстановить только такие диагностированные сообщения текущего
+межкаталожного окна (максимум 14 дней); после успешного typed import snapshot
+получает `order_backfilled`. Остальная история чата автоматически не
+переосмысливается.
 
 ## Production flow
 
@@ -170,6 +187,13 @@ parser/model version. Snapshot хранит только hashed stable decision 
 невозможна.
 
 Owner override требует re-auth, reason/comment и audit. Intake не блокируется.
+
+`closed_at` — отдельный intake cutoff. Когда срок наступил, lifecycle worker и
+admin API переводят каталог в `closed`, не ожидая чистого parser-health: иначе
+неразрешённая строка позволяла бы продолжать принимать новые заказы после
+объявленного срока. Финальная выгрузка остаётся заблокирована preflight до
+исправления/явного owner override. Старые импорты, потерявшие `closed_at`,
+восстанавливаются только из строгого диапазона дат в operator-owned title.
 
 ## Reports and scheduling
 

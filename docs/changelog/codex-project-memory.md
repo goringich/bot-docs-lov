@@ -15,8 +15,12 @@
 
 ## Канонические инварианты
 
-- Источник истины для товарного состава: текст, который оператор вставляет в каталог через `import-text`.
-- Заказы должны перепарсиваться по текущему каталогу; каталог не должен достраиваться из пользовательских заказов, `tg_updates` или admin-feed runtime-логикой.
+- Источник истины для товарного состава: operator-owned source text — ручной
+  `import-text` либо, при включённом `feature_catalog_admin_post_sync`,
+  подтверждённая admin/sender-chat публикация со строгой формой списка.
+- Заказы должны перепарсиваться по текущему каталогу; каталог никогда не
+  достраивается из пользовательских заказов, unresolved queue или
+  непроверенного `tg_updates`.
 - Export строится по уже распарсенным заказам и каталожной семантике, а не по эвристикам Excel-шаблона.
 - Excel-шаблон задаёт только сетку, стили и внешнее представление. Он не должен переопределять бизнес-смысл единицы товара.
 - Если строка заказа привязана к `catalog_item` / SKU, количество и единица должны интерпретироваться только через `catalog.unit_hint` / `pack_hint`.
@@ -183,3 +187,35 @@
   contract `43 passed`; POST preflight в production Python 3.12 `13 passed`;
   API/admin health green. Локальный Python 3.14 TestClient по-прежнему зависает,
   поэтому production preflight проверен в собранном контейнере.
+
+## Catalog ingress и deadline stabilization 2026-07-25
+
+- Корень незакрывшегося catalog `17`: `/catalog_import` корректно разбирал
+  `date: 12.07.2026..13.07.2026`, но при INSERT отбрасывал `end_dt` и сохранял
+  `closed_at=NULL`; все active-catalog запросы доверяли только `status=open`.
+- Новый импорт сохраняет конец диапазона как end-of-day. Worker и admin API
+  восстанавливают старые пропущенные deadlines только из строгого диапазона в
+  operator-owned title (`Городец 12.07-13.07.2026`) и закрывают истёкшие
+  каталоги. Проверка идёт на startup, периодически в worker, перед order intake
+  и при чтении списка каталогов.
+- `closed_at` теперь intake cutoff, а не награда за чистый parser-health.
+  Истёкший каталог прекращает принимать новые заказы; unresolved по-прежнему
+  блокируют final export/manual finalization через preflight.
+- Опциональный ключ `feature_catalog_admin_post_sync` (default `true`,
+  выключается в `DebugPage → Каталог`) разрешает только подтверждённым
+  admin/sender-chat product posts создавать/обновлять позиции. Поддержаны
+  price posts и списки с `КГ/ШТ/УП/БАНКА/ПАЧ/НАБ`; повтор idempotent, память
+  добавляет aliases/unit, STOP деактивирует только названную позицию.
+- Клиентский текст никогда не входит в catalog sync. Если order-like сообщение
+  пришло до первого каталога, auto-create восстанавливает только уже
+  диагностированные `*_order_without_catalog` сообщения текущего окна
+  (максимум 14 дней) через общий typed parser и помечает snapshot
+  `order_backfilled`; неоднозначные строки остаются unresolved.
+- UI открытия больше не отправляет старые `opened_at/closed_at` закрытого
+  lifecycle, а date-only закрытие означает конец выбранного UTC-дня. Полное
+  resulting window валидируется даже при PATCH только одной границы.
+- Для `autoflush=False` worker snapshot upsert теперь обновляет pending ORM-row,
+  а не создаёт второй `message_snapshots` перед диагностической
+  переклассификацией; ORM снова отражает существующий unique `(chat_id,
+  message_id)`. Config loaders допускают environment-only запуск при
+  недоступном локальном dotenv, не ослабляя обязательные `must(...)` значения.

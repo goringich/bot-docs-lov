@@ -3,7 +3,7 @@ title: User flows by role
 type: guide
 status: current
 tags: [user-flow, roles, owner, regional-admin, pickup-admin, customer]
-updated: 2026-05-01
+updated: 2026-07-25
 related:
   - "[[12-admin-panel]]"
   - "[[08-admin-flows]]"
@@ -106,10 +106,19 @@ sequenceDiagram
 
 ## Owner-flow для новой раздачи (happy-path)
 
-1. **Импорт каталога** (`Catalogs → Import text`) — оператор вставляет прайс из чата.
+1. **Выбор ingress каталога**:
+   - ручной: `Catalogs → Import text`;
+   - автоматический: sysadmin включает в `DebugPage → Каталог`
+     `feature_catalog_admin_post_sync`, после чего подтверждённые публикации
+     администратора со списком товаров становятся operator-owned source text.
 2. **Открытие каталога** (`status=open`, `opened_at=now`).
 3. **Сбор заказов** — клиенты пишут в чат, бот парсит, заказы текут в DB.
-4. **Закрытие сбора** (`distribution_mode=true` + `status=closed`, `closed_at=now`).
+   Если несколько order-like сообщений успели прийти до первой автоматической
+   публикации, каталог подхватит только диагностированные
+   `*_order_without_catalog` сообщения текущего окна.
+4. **Закрытие сбора** — owner заранее задаёт `closed_at` в диалоге дат или
+   закрывает вручную. По наступлении срока новый intake прекращается
+   автоматически; проблемы parser-health не продлевают сбор.
 5. **Выгрузка для раздачи** (`Export → Distribution 1:1`) — pickup_admin'ы получают свои файлы.
 6. **Выдача** — pickup_admin закрывает delivery_status'ы.
 7. **Reparse** при необходимости — `feature_catalog_reparse` после ручной правки каталога.
@@ -121,3 +130,5 @@ sequenceDiagram
 > - Не показывать DebugPage без проверки `is_owner_or_sysadmin`.
 > - Не вешать «опасные» действия на одиночное нажатие — для exports/role-changes требуется `require_password_confirmation`.
 > - Не помещать sysadmin-тогглы на SettingsPage (см. `AGENTS.md → Placement rules`).
+> - Не включать admin-post sync для произвольных сообщений: только
+>   подтверждённый администратор/sender-chat и явный список товаров.

@@ -3,7 +3,7 @@ title: Stability playbook — orders / parser / catalog / export
 type: runbook
 status: current
 tags: [stability, runbook, parser, catalog, orders, export, regression]
-updated: 2026-07-24
+updated: 2026-07-25
 related:
   - "[[26-export-contract]]"
   - "[[26-catalog-source-of-truth]]"
@@ -52,11 +52,24 @@ related:
 
 | Правило | Где живёт |
 |---|---|
-| Никаких runtime INSERT в `catalog_items` из заказа | enforced by code review |
+| Никаких runtime INSERT в `catalog_items` из клиентского заказа | enforced by code review |
+| Admin-post sync работает только для подтверждённого admin/sender-chat и сильной формы списка; выключается `feature_catalog_admin_post_sync` | `worker/catalog_heal.py`, `DebugPage` |
 | Каталог под старые заказы не переписывается | `feature_catalog_reparse` запускает reparse заказов под текущий каталог |
 | Расширение через `aliases` — единственно допустимая правка пост-импорта | `admin_service/app/api/routers/catalogs.py::update_catalog_item` |
 | `is_active=0` / `stop_at` / `stop_until` блокируют матч | `_resolve_catalog_item_for_line` |
 | `position_order` диктует порядок колонок в distribution-экспорте | `_apply_distribution_catalog_headers` |
+| `closed_at <= now` означает закрытый intake, даже если `status` ещё не успел обновиться | `catalog_lifecycle.py`, worker periodic check, admin startup/list |
+| Старый `/catalog_import` с диапазоном в title и пустым `closed_at` чинится только по строгому диапазону дат | `backfill_legacy_catalog_deadlines` |
+
+### 3.1. Проверка admin-post ingress
+
+- [ ] При выключенном `feature_catalog_admin_post_sync` публикация потреблена как admin-origin, но каталог/позиции не изменены.
+- [ ] При включённом флаге повтор одной публикации не создаёт второй каталог или дубли товаров.
+- [ ] Память добавляет только безопасные aliases/unit к позиции из публикации.
+- [ ] Клиент с похожим текстом не может изменить каталог.
+- [ ] `СТОП` затрагивает только перечисленные позиции.
+- [ ] Backfill после автосоздания ограничен `*_order_without_catalog` текущего окна и сохраняет `raw_text`, qty и unresolved.
+- [ ] Для открытия/закрытия из UI не отправляются старые даты предыдущего lifecycle.
 
 ## 4. Экспорт
 
