@@ -3,7 +3,7 @@ title: Otlichniy Ulov — Map of Content
 type: moc
 status: current
 tags: [moc, hub, project/otlichniy-ulov]
-updated: 2026-05-01
+updated: 2026-07-25
 ---
 
 # Otlichniy Ulov — карта документации
@@ -74,6 +74,7 @@ updated: 2026-05-01
 ## 🤖 AI агенты и эта база знаний
 
 - [[29-ai-knowledge-base]] — как Claude / Copilot должны читать эту папку *(новое)*.
+- [[33-task-completion-gate]] — доказуемое завершение задачи: проверки, live-результат и честный `BLOCKED`.
 - `../AGENTS.md` — глобальный prompt-runbook для Codex/Claude.
 - `../.github/copilot-instructions.md` — инструкции для GitHub Copilot.
 - `../CLAUDE.md` — точка входа Claude Code в репозиторий.
@@ -82,6 +83,7 @@ updated: 2026-05-01
 
 - [[09-testing-strategy]] — какие тесты обязательны для каждой подсистемы.
 - [[28-stability-playbook#тестовый-минимум]] — pre-merge чек-лист.
+- [[33-task-completion-gate]] — terminal gate перед заявлением «готово».
 
 ## 📜 История и решения
 

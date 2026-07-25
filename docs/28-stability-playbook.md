@@ -58,7 +58,7 @@ related:
 | Расширение через `aliases` — единственно допустимая правка пост-импорта | `admin_service/app/api/routers/catalogs.py::update_catalog_item` |
 | `is_active=0` / `stop_at` / `stop_until` блокируют матч | `_resolve_catalog_item_for_line` |
 | `position_order` диктует порядок колонок в distribution-экспорте | `_apply_distribution_catalog_headers` |
-| `closed_at <= now` означает закрытый intake, даже если `status` ещё не успел обновиться | `catalog_lifecycle.py`, worker periodic check, admin startup/list |
+| `closed_at <= now` означает закрытый intake, даже если `status` ещё не успел обновиться | `catalog_lifecycle.py`, worker periodic check, admin startup и основные catalog read paths (list/detail/bootstrap) |
 | Старый `/catalog_import` с диапазоном в title и пустым `closed_at` чинится только по строгому диапазону дат | `backfill_legacy_catalog_deadlines` |
 
 ### 3.1. Проверка admin-post ingress

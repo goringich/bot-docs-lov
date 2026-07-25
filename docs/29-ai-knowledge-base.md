@@ -3,7 +3,7 @@ title: AI agents knowledge base — how Claude / Copilot / Codex use this docs v
 type: guide
 status: current
 tags: [ai, claude, copilot, codex, prompts, obsidian, knowledge-base]
-updated: 2026-05-01
+updated: 2026-07-25
 related:
   - "[[_index]]"
   - "[[../AGENTS.md]]"
@@ -32,6 +32,7 @@ related:
 3. **Если задача про auth / middleware / роли / экспорт** — открыть [[27-security-runbook]] и [[31-rate-limit-buckets]].
 4. **Любой контрактный документ — это барьер для регрессии**. Если код противоречит документу, либо документ устарел (PR в обе стороны), либо код некорректен.
 5. **Не выдумывать имена эндпоинтов / ключей настроек**: всегда сверять с фактом (`grep` в `admin_service/app/api/routers/`).
+6. **Перед финальным ответом проходить [[33-task-completion-gate]]**: локальные тесты не заменяют deploy и проверку фактического результата в живой системе. Без всех применимых доказательств статус только `BLOCKED`, а не «готово».
 
 ## Что AI-агенту делать **нельзя**
 

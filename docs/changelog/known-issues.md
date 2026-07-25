@@ -36,6 +36,8 @@
 
 ## Open Issues
 
+- (2026-07-25) **FastAPI/Starlette `TestClient` hangs in the current local Python 3.14.5 runtime (and the available local 3.13 package set):** even a minimal `FastAPI()` route blocks in `anyio.from_thread` / `starlette.testclient` until externally timed out. This is reproduced without project middleware or database code, so it is not an admin API runtime regression. **Impact:** local `admin_service` TestClient suites and `make check-fast` cannot be treated as green on these interpreters. **Canonical verification route:** production images use Python 3.12, and the admin-service CI job is pinned to that same runtime. Use Python 3.12 or the production container for the full admin preflight. Do not replace the hang with a skipped test.
+
 - (2026-06-21) **Если backend миграции не применены до head, intake может silently деградировать:** worker падает на insert в `orders` с `Unknown column 'parent_order_id'` (или соседние reorder/archive поля), а `tg_updates` застревают в `new/retry` до ручного фикса схемы. **Runbook:** выполнить `alembic -c /app/backend/alembic.ini upgrade head` и перезапустить `api/worker`.
 
 - (2026-06-21) **MAX: заказы не появляются, если во входящем потоке только service events** (`bot_added`, `bot_started`) или тестовые сообщения без order-intent (`test order check`). В таком случае `tg_updates` содержит события MAX, но pipeline корректно не создаёт записи в `orders`, потому что нет валидного `message_created` с текстом заказа. Проверка: `tg_updates` по provider=`max` и `orders` по `source_provider='max'`.

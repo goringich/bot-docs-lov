@@ -1,5 +1,35 @@
 # Decisions log
 
+## 2026-07-25 — completion is evidence-based, not a handoff
+
+**Context**: Локальный тест или готовый diff иногда ошибочно выдавались за
+завершение задачи, хотя пользователь просил изменить работающий runtime или
+данные, а deploy и проверка результата не были выполнены.
+
+### Решение
+
+- Добавлен единый [[33-task-completion-gate]] для Codex, Claude и Copilot.
+- Терминальный статус строго двоичный: `COMPLETE` только с доказательствами
+  всех применимых слоёв; при недоступном runtime/data/deploy — `BLOCKED` с
+  точным недостающим доступом.
+- `make check-agent-contract` защищает сам контракт от случайного удаления и
+  входит в стандартные `fast`/`all` check runners.
+
+**Consequences**:
+- Команда или handoff, которые не были выполнены, больше не считаются
+  доказательством результата.
+- Задачи, меняющие production runtime, не могут быть закрыты только по
+  unit-тестам: требуется подтверждение deploy и требуемого бизнес-эффекта.
+- Локальные FastAPI `TestClient` suites сначала проходят короткий timeout probe;
+  при несовместимом интерпретаторе они fail-fast, а admin-service CI закреплён
+  на production-matched Python 3.12.
+- Для live catalog proof добавлен безопасный verifier
+  `backend/scripts/verify_catalog_lifecycle.py`: он оценивает только
+  sanitized `id/status/closed_at` и не открывает config/DB самостоятельно.
+- Lifecycle reconciliation выполняется перед list/detail/bootstrap catalog
+  reads, поэтому просроченный cutoff не остаётся визуально `open` между
+  периодическими worker-проходами.
+
 ## 2026-06-22 — orders list filters source provider with TG/MAX buttons
 
 **Context**: Оператору нужен быстрый operational способ смотреть ленту заказов по источнику соцсети (`telegram` vs `max`) прямо в `OrdersPage`, без owner-only scope-фильтров.
@@ -525,7 +555,8 @@ catalog_item_rows = db.execute(
 
 - В `scripts/run_checks.sh` добавлен новый режим `catalogs-preflight`:
   - `py_compile` для `admin_service/app/api/routers/catalogs.py`;
-  - regression test `admin_service/tests/test_catalogs_legacy_schema_compat.py`.
+  - lifecycle regression `admin_service/tests/test_catalog_lifecycle.py` и
+    legacy-schema regression `admin_service/tests/test_catalogs_legacy_schema_compat.py`.
 - В `Makefile` добавлены:
   - `make check-catalogs-preflight`;
   - `make check-prebuild` (`check-post-preflight` + `check-catalogs-preflight`).

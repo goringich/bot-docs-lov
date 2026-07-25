@@ -198,7 +198,9 @@ MVP: админы вручную заводят каталог (сбор) и п�
 ### Catalogs preflight перед risky изменениями (добавлено 2026-04-17)
 - Для изменений в `admin_service/app/api/routers/catalogs.py`, `core_tables` и schema-совместимости `chats/catalogs/catalog_items` перед завершением задачи обязательно запускать:
 	- `make check-catalogs-preflight`
-- Команда прогоняет py_compile + regression тесты legacy-schema для `GET /catalogs` и `GET /catalogs/{id}/items`.
+- Команда прогоняет py_compile + lifecycle/legacy-schema regression тесты для
+  `GET /catalogs`, `GET /catalogs/{id}`, bootstrap-options и
+  `GET /catalogs/{id}/items`.
 
 ### Обязательный prebuild guard
 - Перед `make compose-build`, `make compose-restart`, `make sync` сначала запускать:

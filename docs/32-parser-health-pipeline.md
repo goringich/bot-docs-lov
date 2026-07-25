@@ -118,9 +118,16 @@ Local Ollama embeddings (`nomic-embed-text`) and calibrated pair reranker
 обезличенный fragment, quantity/unit и candidates; schema violation, timeout,
 budget exhaustion или SKU вне списка дают abstention.
 
-Semantic layer запускается только после deterministic abstention. Он не имеет
-права переиграть `ambiguous_margin`, product/form conflict или unit conflict;
-missing catalog coverage остаётся operator decision. Offline gold v2 содержит
+Semantic layer запускается только для `PARSER_RERANKER_MODE=production` и
+только после deterministic `low_score`. При default `PARSER_AI_AUTO_MATCH=0`
+она не вызывает Ollama из intake/replay/reparse и не меняет исходный reason;
+`shadow` остаётся отдельной диагностикой. `no_candidates`,
+`ambiguous_margin`, product/form conflict и unit conflict возвращаются без
+semantic rerank. Векторный сосед может поднять только уже лексически
+подтверждённого, conflict-free кандидата — он не создаёт SKU-match из
+нерелевантной близости. Поэтому отсутствующий в каталоге товар остаётся
+`no_candidates`, а не вводящим в заблуждение `low_score` с чужим SKU.
+Missing catalog coverage остаётся operator decision. Offline gold v2 содержит
 раздельные tuning/validation/holdout catalogs и проверяет одновременно top-1,
 quantity/unit, status/end-to-end и нулевой false-confident rate.
 
@@ -189,7 +196,8 @@ parser/model version. Snapshot хранит только hashed stable decision 
 Owner override требует re-auth, reason/comment и audit. Intake не блокируется.
 
 `closed_at` — отдельный intake cutoff. Когда срок наступил, lifecycle worker и
-admin API переводят каталог в `closed`, не ожидая чистого parser-health: иначе
+admin API (startup и read paths list/detail/bootstrap) переводят каталог в
+`closed`, не ожидая чистого parser-health: иначе
 неразрешённая строка позволяла бы продолжать принимать новые заказы после
 объявленного срока. Финальная выгрузка остаётся заблокирована preflight до
 исправления/явного owner override. Старые импорты, потерявшие `closed_at`,

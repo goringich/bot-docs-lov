@@ -219,3 +219,44 @@
   переклассификацией; ORM снова отражает существующий unique `(chat_id,
   message_id)`. Config loaders допускают environment-only запуск при
   недоступном локальном dotenv, не ослабляя обязательные `must(...)` значения.
+
+## Semantic ML error-taxonomy hardening 2026-07-25
+
+- Найден ложный ML-симптом: при `PARSER_AI_AUTO_MATCH=0` semantic fallback
+  всё равно ходил в embeddings и заменял честный `no_candidates` на
+  `low_score` с ближайшим, но нерелевантным SKU (например, отсутствующая
+  «ряпушка» выглядела как слабый матч к другой рыбе).
+- Production semantic path теперь включается только при
+  `PARSER_RERANKER_MODE=production` **и** свежем version-matched evaluation
+  artifact, открывающем auto-gate. В `shadow`/`disabled` intake, replay и
+  reparse не вызывают Ollama и сохраняют deterministic decision.
+- Даже при открытом gate semantic score может усилить только уже
+  лексически подтверждённого conflict-free кандидата. Векторная близость без
+  product evidence не может выбрать SKU. `no_candidates`,
+  `ambiguous_margin`, `catalog_conflict` и `unit_conflict` не переписываются
+  ML-слоем.
+- Добавлены regression tests на ложный `low_score`, disabled-reranker и
+  overconfident vector neighbour; gold v2 сохранил `top-1=1.0` и
+  `false_confident_match_rate=0.0`.
+
+## Evidence-based task completion 2026-07-25
+
+- `docs/33-task-completion-gate.md` — обязательный terminal gate для всех
+  agent surfaces. `COMPLETE` требует evidence по всем применимым слоям;
+  runtime/data request дополнительно требует deploy и live business proof.
+- При недоступном Docker/API/DB задача остаётся `BLOCKED`, а не маскируется
+  словами «готово после рестарта». `make check-agent-contract` проверяет, что
+  этот контракт не выпал из AGENTS/Claude/Copilot/run checks.
+- Local Python 3.14.5 (and the available local 3.13 package set) hangs in a
+  minimal FastAPI `TestClient` probe outside project code.
+  `scripts/run_checks.sh` now probes it with a 10-second timeout before every
+  admin-service TestClient suite and fails clearly instead of hanging; Python 3.12,
+  matching the production image and admin-service CI, remains the full-admin
+  verification route.
+- `backend/scripts/verify_catalog_lifecycle.py` evaluates sanitized live
+  `catalog_id/status/closed_at` evidence without opening config or DB. It is
+  covered by `test_verify_catalog_lifecycle_script.py` and is not a substitute
+  for querying the deployed runtime first.
+- Просроченный `closed_at` теперь reconciled не только lifecycle worker и
+  catalog list, но и прямым catalog detail и bootstrap-options read paths:
+  оператор не увидит такой каталог как `open` до фонового прохода.
