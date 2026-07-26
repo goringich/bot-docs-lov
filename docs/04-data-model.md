@@ -40,7 +40,7 @@ Raw update от Telegram.
 Ключевые поля:
 - `chat_id`
 - `code` (unique per chat)
-- `status`: например `open|closed`
+- `status`: `scheduled|open|closed`
 - `opened_at`/`closed_at`
 
 Ограничение по бизнес-правилу: в одном чате один активный каталог.

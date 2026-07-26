@@ -60,6 +60,8 @@ related:
 | `position_order` диктует порядок колонок в distribution-экспорте | `_apply_distribution_catalog_headers` |
 | `closed_at <= now` означает закрытый intake, даже если `status` ещё не успел обновиться | `catalog_lifecycle.py`, worker periodic check, admin startup и основные catalog read paths (list/detail/bootstrap) |
 | Старый `/catalog_import` с диапазоном в title и пустым `closed_at` чинится только по строгому диапазону дат | `backfill_legacy_catalog_deadlines` |
+| Будущий каталог хранится как `scheduled`; в `opened_at` он атомарно заменяет текущий `open` | `collection_automation.py`, `catalog_lifecycle.py` |
+| Напоминание прекращается после появления будущего каталога; отчёт/напоминание идемпотентны по slot key | `collection_automation_state` |
 
 ### 3.1. Проверка admin-post ingress
 
@@ -70,6 +72,9 @@ related:
 - [ ] `СТОП` затрагивает только перечисленные позиции.
 - [ ] Backfill после автосоздания ограничен `*_order_without_catalog` текущего окна и сохраняет `raw_text`, qty и unresolved.
 - [ ] Для открытия/закрытия из UI не отправляются старые даты предыдущего lifecycle.
+- [ ] Повторное сообщение ответственного обновляет тот же `scheduled`-каталог и сохраняет прежний SKU повторяющейся позиции.
+- [ ] Клиентское сообщение не может создать `scheduled`-каталог.
+- [ ] Weekly/biweekly расчёт всё равно нормализует окно к настроенным weekday/time.
 
 ## 4. Экспорт
 

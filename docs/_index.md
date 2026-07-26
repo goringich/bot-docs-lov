@@ -41,6 +41,7 @@ updated: 2026-07-25
 ## 📝 Заказы
 
 - [[28-stability-playbook]] — правила стабильности заказов *(новое)*.
+- [[34-collection-automation]] — расписание сборов, напоминания, будущий каталог и ежедневный отчёт.
 - [[32-parser-health-pipeline]] — health monitoring и zero-unresolved lifecycle.
 - [[08-admin-flows]] — операционные сценарии (открытие/закрытие раздачи, ручной импорт каталога).
 - [[12-admin-panel]] — карта `admin-web`, разделы и роли.
