@@ -99,7 +99,7 @@
 При ошибках 429 Too Many Requests:
 ```sql
 -- Очистить очередь необработанных updates
-UPDATE tg_updates SET status = 'done', error_text = 'rate_limit_skip' 
+UPDATE tg_updates SET status = 'done', error_text = 'rate_limit_skip'
 WHERE status IN ('new', 'processing');
 ```
 

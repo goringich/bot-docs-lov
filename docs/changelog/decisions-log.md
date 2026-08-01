@@ -537,7 +537,7 @@ catalog_item_rows = db.execute(
 - Changed `_UNIT_PATTERNS` in `admin_service/app/api/routers/catalogs.py` to return lowercase units:
   - "КГ" → normalize to "кг" (not "КГ")
   - "ШТ" → normalize to "шт" (not "ШТ")
-  - "УП" → normalize to "уп" (not "УП")  
+  - "УП" → normalize to "уп" (not "УП")
   - "Ж/Б" → "шт", "КАПС" → "уп"
 - API returns uppercase display units (`_display_unit`) for UI/export; internally stored lowercase for consistency with parser.
 
@@ -2397,7 +2397,7 @@ Pickup-админы и модераторы могут устанавливат�
 **Consequences**:
 - Случайные двойные клики и повторный Enter больше не размножают одинаковые login-запросы.
 - Пользователь видит, сколько реально ждать до следующей попытки.
-- Лимитер по логину остаётся защитным, но перестаёт быть «сам себе DOS». 
+- Лимитер по логину остаётся защитным, но перестаёт быть «сам себе DOS».
 
 ## 2026-03-13: Stabilize delivery role flows and surface order errors on main orders page
 
@@ -3405,19 +3405,19 @@ Bot needed to handle "dumb" orders better - incomplete data, typos, unclear item
    - Added prefix matching for first word (e.g., "форел" → "Форель филе")
    - Improved suggestion algorithm with better scoring
    - Now returns up to 3 suggestions instead of 2
-   
+
 2. **Smart order replies** (`order_presenter.py`):
    - Always shows full order summary: what's accepted, what's rejected, what's missing
    - Shows customer info (name, phone, pickup) at the top
    - Detailed per-item breakdown with suggestions for unknown items
    - Lists available catalog items when all items rejected
-   
+
 3. **Order supplement via reply** (`worker.py`):
    - When user replies to bot's "missing data" message, bot extracts the missing info
    - Recognizes: phone (4 digits), pickup place (from known list or short text), name (1-3 words)
    - Auto-updates user profile for future orders
    - Changes order status from "needs_admin" to "active" when all data collected
-   
+
 4. **Catalog re-open fix** (`admin_commands.py`):
    - `/open` command now handles duplicate codes gracefully
    - Re-opens closed catalog with same code instead of failing
@@ -3474,7 +3474,7 @@ Bot needed to handle "dumb" orders better - incomplete data, typos, unclear item
 
 ## 2026-07-17: Make API catalog a clearly standalone screen
 
-**Context**: Хотя каталог endpoint-ов уже существовал отдельно от `SettingsPage`, в навигации и текстах он читался как внутренний owner-tooling экран `API Center`. Пользовательский запрос был проще: отдельная понятная страница со всеми endpoint-ами, а не ощущение, что нужная функция «где-то в настройках». 
+**Context**: Хотя каталог endpoint-ов уже существовал отдельно от `SettingsPage`, в навигации и текстах он читался как внутренний owner-tooling экран `API Center`. Пользовательский запрос был проще: отдельная понятная страница со всеми endpoint-ами, а не ощущение, что нужная функция «где-то в настройках».
 
 ### Решения
 

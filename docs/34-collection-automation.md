@@ -99,4 +99,3 @@ related:
 | Admin API lifecycle mirror | `admin_service/app/catalog_lifecycle.py` |
 | Настройки API | `admin_service/app/api/routers/settings.py` |
 | Настройки UI | `admin-web/src/pages/SettingsPage.tsx` |
-
