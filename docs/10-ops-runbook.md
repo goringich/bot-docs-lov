@@ -75,7 +75,9 @@ curl -I http://100.76.165.75:4173/login
 
 Важно: worker **не** дописывает каталог из runtime/admin-feed сообщений. Каталог обновляется отдельно (через админские операции или ручной синк), а parser/worker только читает текущий каталог как источник истины.
 
-**Последняя миграция:** `b2c3d4e5f6a7` — bot_visible 3-mode (hidden/reactions_only/full), regional_admin role seed, high-load indexes, admin_user_regions table.
+**Последняя миграция:** `p2q3r4s5t6u7` — provider event/message identity,
+bounded worker retry и provider-aware diagnostics. Перед restart worker эта
+миграция обязательна: новый runtime читает её колонки очереди.
 
 Подробные команды (копипаст) есть в [[11-restart]].
 
@@ -120,6 +122,10 @@ docker compose --env-file ../.env down
 Рекомендуемая минимальная проверка:
 1) `curl http://127.0.0.1:8000/health`
 2) отправить тестовое сообщение в чат и убедиться, что worker не падает
+3) проверить `/debug/sysadmin-observability`: `new/retry/processing/failed`,
+   migration head и freshness parser-health
+4) создать read-only reconciliation artifact из production, см.
+   [[36-production-order-reconciliation]]
 
 Если нужно вручную массово перепарсить уже сохранённые заказы после ручного обновления каталога, alias-правок или parser-fix, используйте `backend/scripts/sync_catalog_from_tg_updates.py` с флагом `--reprocess-all` для нужного чата.
 

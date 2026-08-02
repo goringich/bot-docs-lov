@@ -62,6 +62,7 @@ related:
 | Старый `/catalog_import` с диапазоном в title и пустым `closed_at` чинится только по строгому диапазону дат | `backfill_legacy_catalog_deadlines` |
 | Будущий каталог хранится как `scheduled`; в `opened_at` он атомарно заменяет текущий `open` | `collection_automation.py`, `catalog_lifecycle.py` |
 | Напоминание прекращается после появления будущего каталога; отчёт/напоминание идемпотентны по slot key | `collection_automation_state` |
+| Ручное/автоматическое закрытие intake не ждёт parser debt; quality gate остаётся на final export | `routers/catalogs.py`, `parser_health.py` |
 
 ### 3.1. Проверка admin-post ingress
 
@@ -122,6 +123,15 @@ python -m pytest -q backend/tests/test_rate_limiter.py \
   backend/tests/test_order_processing_mvp.py \
   backend/tests/test_replay_pipeline_smoke.py \
   backend/tests/test_parser_upgrade.py
+
+# Ingress exactly-once / retry / reconciliation / backfill
+python -m pytest -q \
+  backend/tests/test_integrations.py \
+  backend/tests/test_provider_order_identity.py \
+  backend/tests/test_worker_retry.py \
+  backend/tests/test_reconciliation.py \
+  backend/tests/test_ingress_identity_migration.py \
+  backend/tests/test_sync_catalog_from_tg_updates.py
 
 # Admin service — full сюита быстрая
 python -m pytest -q admin_service/tests

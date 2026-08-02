@@ -180,7 +180,7 @@ approved `bad_qty` exception и confirmed non-order; последний нико
 
 ## Final preflight
 
-Strict/distribution/pivot, final `/exports/build` и закрытие каталога блокируются,
+Strict/distribution/pivot и final `/exports/build` блокируются,
 если есть unresolved unknown/bad_qty, pending/failed reparse или строки без
 diagnostics после миграции.
 
@@ -193,7 +193,8 @@ parser/model version. Snapshot хранит только hashed stable decision 
 состояний, а не разностью общих счётчиков, поэтому взаимная компенсация ошибок
 невозможна.
 
-Owner override требует re-auth, reason/comment и audit. Intake не блокируется.
+Owner override финальной выгрузки требует re-auth, reason/comment и audit.
+Ручное закрытие intake не требует override и не блокируется parser debt.
 
 `closed_at` — отдельный intake cutoff. Когда срок наступил, lifecycle worker и
 admin API (startup и read paths list/detail/bootstrap) переводят каталог в
@@ -217,6 +218,12 @@ One-shot generation:
 docker-compose -f infra/docker-compose.yml --profile ops run --rm parser_health_reporter
 ```
 
+Production reporter получает scope только из явного `--environment production`
+и запускается с `--require-production`; generic host `APP_ENV` намеренно не
+используется. Artifact содержит deployed commit и Alembic current/head. Если
+commit неизвестен или migrations не на head, top-level health принудительно
+`blocked`, даже когда operational parser debt равен нулю.
+
 Timer templates: `infra/systemd/otlichniy-parser-health.{service,timer}`.
 PII guard выполняется до записи файлов и DB snapshot.
 
@@ -233,6 +240,12 @@ source catalog и sanitized top candidate SKU, чтобы нулевой/мас�
 их существующим private Git transport. Таймер запускается ежечасно через
 `flock`; публикация по умолчанию выключена и не требует хранения GitHub token
 в репозитории.
+
+Production compose явно задаёт `PARSER_HEALTH_ENV=production`; dev overlay —
+`local`. Тот же hourly pass создаёт sanitized
+`runtime-reports/reconciliation/current.json`, см.
+[[36-production-order-reconciliation]]. Admin observability поднимает critical
+alert, если DB snapshot parser-health старше 90 минут или отсутствует.
 
 ## Reparse
 

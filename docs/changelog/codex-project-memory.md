@@ -288,3 +288,30 @@
   может начать личный диалог с произвольным ником, пока пользователь не открыл
   бота. Числовой Telegram ID поддерживается напрямую.
 - Полный контракт: [[34-collection-automation]].
+
+## Provider reconciliation и exactly-once hardening 2026-08-02
+
+- Найдены два ingress-дефекта: non-Telegram `update_id` был глобальным 31-bit
+  hash, а order dedupe оставался `(catalog_id, source_message_id)`. Это могло
+  дать false duplicate между provider/chat и повтор одного сообщения после
+  catalog switch.
+- Миграция `p2q3r4s5t6u7` добавляет provider event/message identity в
+  `tg_updates`, `orders` и `message_snapshots`. Historical duplicates не
+  удаляются; canonical key получает самая ранняя строка, остальные видны в
+  reconciliation.
+- Worker теперь использует bounded `retry` с exponential backoff и возвращает
+  stale `processing` lease в очередь. Terminal `failed` остаётся operator alert.
+- Ручное/автоматическое закрытие intake больше не блокируется parser-health;
+  unresolved по-прежнему блокирует final export без owner override.
+- Hourly ops job создаёт sanitized production reconciliation по provider/chat/
+  catalog/day. `healthy` fail-closed без deployed commit, explicit working
+  chats, provider history proof, migration head и zero-unaccounted.
+- Parser-health больше не наследует generic host `APP_ENV`: production scope
+  задаётся явно, а отсутствующий deployed commit или Alembic head блокирует
+  report. Это устраняет ложную маркировку локальной БД как production.
+- Telegram Desktop export теперь default-dry-run проходит через `tg_updates` и
+  обычный worker с исходными timestamp/user/message IDs; повтор enqueue
+  идемпотентен. Direct catalog import требует exact lifecycle window и stable
+  identity, не архивирует существующие orders и применяет только receipt того
+  же dry-run scope.
+- Полный контракт: [[36-production-order-reconciliation]].
